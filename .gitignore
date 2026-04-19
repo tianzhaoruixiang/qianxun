@@ -1,0 +1,11 @@
+**/target/
+**/node_modules/
+**/.idea/
+**/.vscode/
+**/dist/
+**/.DS_Store
+
+# 编排环境变量（含密钥），保留 .env.example
+docker/.env
+!docker/.env.example
+

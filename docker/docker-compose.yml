@@ -1,0 +1,186 @@
+# 千寻 · 一键编排：Doris (4.0.2) + Hermes Agent (Kimi) + 千寻后端 + 千寻前端
+# 入口：cd docker && ./bin/up.sh
+# 关停：./bin/down.sh        # 仅关停  /  ./bin/down.sh -v 同时清理数据卷
+# 验证：./bin/verify.sh
+#
+# 所有可调项集中在同目录 .env（参考 .env.example）
+
+name: qianxun
+
+services:
+  # ───────────────────────────── Doris FE ─────────────────────────────
+  doris-fe:
+    image: apache/doris:${DORIS_FE_TAG:-fe-4.0.2}
+    container_name: qianxun-doris-fe
+    hostname: fe-01
+    environment:
+      - FE_SERVERS=fe1:172.29.80.2:9010
+      - FE_ID=1
+    ports:
+      - "${DORIS_FE_HTTP_PORT:-8030}:8030"
+      - "${DORIS_FE_QUERY_PORT:-9030}:9030"
+    volumes:
+      - doris-fe-meta:/opt/apache-doris/fe/doris-meta
+      - doris-fe-log:/opt/apache-doris/fe/log
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8030/api/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
+    networks:
+      qianxun_net:
+        ipv4_address: 172.29.80.2
+
+  # ───────────────────────────── Doris BE ─────────────────────────────
+  doris-be:
+    image: apache/doris:${DORIS_BE_TAG:-be-4.0.2}
+    container_name: qianxun-doris-be
+    hostname: be-01
+    depends_on:
+      doris-fe:
+        condition: service_healthy
+    environment:
+      - FE_SERVERS=fe1:172.29.80.2:9010
+      - BE_ADDR=172.29.80.3:9050
+    ports:
+      - "${DORIS_BE_WEBSERVER_PORT:-8040}:8040"
+    volumes:
+      - doris-be-storage:/opt/apache-doris/be/storage
+      - doris-be-log:/opt/apache-doris/be/log
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8040/api/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
+    networks:
+      qianxun_net:
+        ipv4_address: 172.29.80.3
+
+  # ───────────────────── Doris 一次性建库建表 ─────────────────────
+  doris-init:
+    image: mysql:8.0
+    container_name: qianxun-doris-init
+    depends_on:
+      doris-fe:
+        condition: service_healthy
+      doris-be:
+        condition: service_healthy
+    volumes:
+      - ./doris/init.sh:/init.sh:ro
+      - ./doris/init:/init:ro
+    entrypoint: ["bash", "/init.sh"]
+    restart: "no"
+    networks:
+      - qianxun_net
+
+  # ─────────────────────────── Hermes Agent ───────────────────────────
+  hermes-agent:
+    image: ${HERMES_IMAGES:-nousresearch/hermes-agent:latest}
+    container_name: qianxun-hermes-agent
+    restart: unless-stopped
+    command: gateway run
+    environment:
+      # OpenAI 兼容 API server（必须显式开启 + 绑定到容器 0.0.0.0）
+      - API_SERVER_ENABLED=true
+      - API_SERVER_HOST=0.0.0.0
+      - API_SERVER_PORT=8642
+      - API_SERVER_KEY=${API_SERVER_KEY:-qianxun-local-dev-key}
+      - GATEWAY_ALLOW_ALL_USERS=true
+      # Kimi / Moonshot（中国站默认 https://api.moonshot.cn/v1）
+      - KIMI_API_KEY=${KIMI_API_KEY:-}
+      - KIMI_BASE_URL=${KIMI_BASE_URL:-https://api.moonshot.cn/v1}
+    ports:
+      - "${HERMES_API_PORT:-8642}:8642"
+    volumes:
+      - hermes-data:/opt/data
+      - ./hermes/config.yaml:/opt/data/config.yaml:ro
+    shm_size: 1g
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8642/health', timeout=3)"]
+      interval: 10s
+      timeout: 8s
+      retries: 30
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: ${HERMES_MEM_LIMIT:-4G}
+          cpus: "${HERMES_CPU_LIMIT:-2.0}"
+    networks:
+      - qianxun_net
+
+  # ──────────────────────────── 千寻后端 ────────────────────────────
+  qianxun-backend:
+    image: qianxun/backend:${QIANXUN_TAG:-dev}
+    container_name: qianxun-backend
+    build:
+      context: ..
+      dockerfile: docker/backend.Dockerfile
+    depends_on:
+      doris-init:
+        condition: service_completed_successfully
+      hermes-agent:
+        condition: service_started
+    environment:
+      # Doris JDBC（容器内通过服务名互访）
+      - DORIS_HOST=doris-fe
+      - DORIS_PORT=9030
+      - DORIS_USER=${DORIS_USER:-root}
+      - DORIS_PASSWORD=${DORIS_PASSWORD:-}
+      # Hermes 对接
+      - QIANXUN_HERMES_ENABLED=${QIANXUN_HERMES_ENABLED:-true}
+      - QIANXUN_HERMES_BASE_URL=http://hermes-agent:8642/v1
+      - HERMES_API_KEY=${API_SERVER_KEY:-qianxun-local-dev-key}
+      - QIANXUN_HERMES_CHAT_MODEL=${QIANXUN_HERMES_CHAT_MODEL:-hermes-agent}
+      - QIANXUN_HERMES_NLU_ENABLED=${QIANXUN_HERMES_NLU_ENABLED:-true}
+      # 兜底 LLM（可选）
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - QIANXUN_LLM_BASE_URL=${QIANXUN_LLM_BASE_URL:-https://api.openai.com/v1}
+      - QIANXUN_LLM_MODEL=${QIANXUN_LLM_MODEL:-gpt-4o-mini}
+      - QIANXUN_LLM_MOCK=${QIANXUN_LLM_MOCK:-true}
+      - JAVA_TOOL_OPTIONS=${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=75 -XX:+UseG1GC}
+    ports:
+      - "${QIANXUN_BACKEND_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO/dev/null", "http://127.0.0.1:8080/api/sessions"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
+    networks:
+      - qianxun_net
+
+  # ──────────────────────────── 千寻前端 ────────────────────────────
+  qianxun-frontend:
+    image: qianxun/frontend:${QIANXUN_TAG:-dev}
+    container_name: qianxun-frontend
+    build:
+      context: ..
+      dockerfile: docker/frontend.Dockerfile
+    depends_on:
+      qianxun-backend:
+        condition: service_started
+    ports:
+      - "${QIANXUN_FRONTEND_PORT:-5173}:80"
+    networks:
+      - qianxun_net
+
+networks:
+  qianxun_net:
+    name: qianxun_net
+    driver: bridge
+    ipam:
+      config:
+        # 固定 .2 / .3 给 Doris FE/BE；其余服务自动分配在 .128/25 段，避免抢占
+        - subnet: ${DORIS_SUBNET:-172.29.80.0/24}
+          ip_range: ${DORIS_IP_RANGE:-172.29.80.128/25}
+          gateway: ${DORIS_GATEWAY:-172.29.80.1}
+
+volumes:
+  doris-fe-meta:
+  doris-fe-log:
+  doris-be-storage:
+  doris-be-log:
+  hermes-data:
