@@ -1,4 +1,4 @@
-import { type FC, useRef, useEffect, useState, useCallback, type ComponentPropsWithoutRef } from "react";
+import { type FC, useRef, useEffect, useState, useCallback, useMemo, type ComponentPropsWithoutRef } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -6,10 +6,13 @@ import {
   Brain, ChevronDown, ChevronUp, Zap, Wrench,
 } from "lucide-react";
 import {
-  type AgentStep, type ChatMessage, type FeedbackType,
+  type AgentStep, type ChatMessage, type EntityCard, type FeedbackType, type ClarificationPayload,
   submitFeedback, deleteFeedback,
 } from "../api";
 import { formatFullTime, cn } from "../lib/utils";
+import { stripEntityBlockForDisplay } from "../lib/entityExtractor";
+import { EntityCardPanel } from "./EntityCardPanel";
+import { ClarificationCard } from "./ClarificationCard";
 
 /* ── Markdown renderer ─────────────────────────────────────────────────────── */
 const Markdown: FC<{ children: string; streaming?: boolean }> = ({ children, streaming }) => (
@@ -68,37 +71,68 @@ const AgentSteps: FC<{ steps: AgentStep[] }> = ({ steps }) => {
           let argsPreview = "";
           try {
             const parsed = JSON.parse(raw) as Record<string, unknown>;
-            argsPreview = Object.entries(parsed)
-              .map(([k, v]) => `${k}: ${String(v)}`)
-              .join("  ")
-              .slice(0, 80);
+            const keyInfo = [
+              typeof parsed.label === "string" ? `label: ${parsed.label}` : "",
+              typeof parsed.emoji === "string" ? `emoji: ${parsed.emoji}` : "",
+              typeof parsed.result === "string" ? `result: ${parsed.result}` : "",
+              typeof parsed.output === "string" ? `output: ${parsed.output}` : "",
+            ].filter(Boolean);
+            if (keyInfo.length > 0) {
+              argsPreview = keyInfo.join("\n").slice(0, 360);
+            } else {
+              argsPreview = JSON.stringify(parsed, null, 2).slice(0, 360);
+            }
           } catch {
-            argsPreview = raw.replace(/[{}"]/g, "").slice(0, 80);
+            argsPreview = raw.replace(/[{}"]/g, "").slice(0, 360);
           }
           return (
-            <div
+            <ToolCallStep
               key={`${step.toolCallId}-${i}`}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-[10px] text-[11.5px] animate-fade-in"
-              style={{
-                maxWidth: "88%",
-                background: "rgba(0,122,255,0.08)",
-                border: "1px solid rgba(0,122,255,0.18)",
-                color: "rgba(0,90,200,0.90)",
-              }}
-            >
-              <Wrench size={10} className="shrink-0" />
-              <span className="font-medium">{step.toolName}</span>
-              {argsPreview && (
-                <>
-                  <span style={{ color: "rgba(0,90,200,0.35)" }}>·</span>
-                  <span className="truncate" style={{ color: "rgba(0,90,200,0.62)" }}>{argsPreview}</span>
-                </>
-              )}
-            </div>
+              toolName={step.toolName}
+              argsPreview={argsPreview}
+            />
           );
         }
         return null;
       })}
+    </div>
+  );
+};
+
+const ToolCallStep: FC<{ toolName: string; argsPreview: string }> = ({ toolName, argsPreview }) => {
+  const [collapsed, setCollapsed] = useState(true);
+  return (
+    <div
+      className="px-3 py-1.5 rounded-[10px] text-[11.5px] animate-fade-in"
+      style={{
+        maxWidth: "88%",
+        background: "rgba(0,122,255,0.08)",
+        border: "1px solid rgba(0,122,255,0.18)",
+        color: "rgba(0,90,200,0.90)",
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => setCollapsed((v) => !v)}
+        className="w-full flex items-center gap-2 text-left"
+        style={{ color: "inherit" }}
+      >
+        <Wrench size={10} className="shrink-0" />
+        <span className="font-medium">{toolName}</span>
+        {argsPreview && (
+          <span className="ml-auto text-[10px]" style={{ color: "rgba(0,90,200,0.62)" }}>
+            {collapsed ? "展开结果" : "收起结果"}
+          </span>
+        )}
+      </button>
+      {!collapsed && argsPreview && (
+        <pre
+          className="mt-1 whitespace-pre-wrap break-words text-[11px] leading-relaxed"
+          style={{ color: "rgba(0,90,200,0.72)", fontFamily: "inherit", marginBottom: 0 }}
+        >
+          {argsPreview}
+        </pre>
+      )}
     </div>
   );
 };
@@ -231,6 +265,11 @@ const MessageItem: FC<{ message: ChatMessage; sessionId: string }> = ({ message,
   const isUser = message.role === "user";
   const isDeep = message.thinkingMode === "deep";
 
+  const entityCards = useMemo(
+    () => (isUser ? [] : (message.entityCards ?? [])),
+    [isUser, message.entityCards],
+  );
+
   return (
     <div className={cn("flex gap-3 animate-fade-in", isUser ? "flex-row-reverse" : "flex-row")}>
       {/* Avatar */}
@@ -290,7 +329,7 @@ const MessageItem: FC<{ message: ChatMessage; sessionId: string }> = ({ message,
         <div
           className="rounded-[18px] px-4 py-2.5 text-[14px] leading-relaxed"
           style={{
-            maxWidth: "82%",
+            maxWidth: "88%",
             background: isUser ? "#007AFF" : "#FFFFFF",
             color: isUser ? "#ffffff" : "rgba(0,0,0,0.85)",
             boxShadow: isUser ? "none" : "0 1px 4px rgba(0,0,0,0.06)",
@@ -311,6 +350,11 @@ const MessageItem: FC<{ message: ChatMessage; sessionId: string }> = ({ message,
         {!isUser && (
           <FeedbackBar sessionId={sessionId} messageId={message.id} />
         )}
+
+        {/* Entity cards panel — 机构/人物实体卡片（>= 3 条时自动显示） */}
+        {!isUser && entityCards.length > 0 && (
+          <EntityCardPanel cards={entityCards} threshold={1} />
+        )}
       </div>
     </div>
   );
@@ -322,8 +366,13 @@ const StreamingMessage: FC<{
   thinkText: string;
   isThinking: boolean;
   steps: AgentStep[];
-}> = ({ text, thinkText, isThinking, steps }) => {
+  /** 后端 entities 事件下发的结构化实体 */
+  streamingEntities?: EntityCard[];
+  clarification?: ClarificationPayload | null;
+  onSelectClarification?: (code: string, name: string) => void;
+}> = ({ text, thinkText, isThinking, steps, streamingEntities = [], clarification, onSelectClarification }) => {
   const hasDeep = isThinking || thinkText.length > 0;
+  const displayText = useMemo(() => stripEntityBlockForDisplay(text), [text]);
 
   return (
     <div className="flex gap-3 animate-fade-in">
@@ -379,7 +428,7 @@ const StreamingMessage: FC<{
           <div
             className="rounded-[18px] px-4 py-2.5 text-[14px] leading-relaxed mt-1"
             style={{
-              maxWidth: "82%",
+              maxWidth: "88%",
               background: "#FFFFFF",
               color: "rgba(0,0,0,0.85)",
               boxShadow: "0 1px 4px rgba(0,0,0,0.06)",
@@ -387,7 +436,7 @@ const StreamingMessage: FC<{
               borderBottomLeftRadius: "6px",
             }}
           >
-            <Markdown streaming>{text}</Markdown>
+            <Markdown streaming>{displayText}</Markdown>
           </div>
         ) : !thinkText && !isThinking ? (
           /* Loading dots */
@@ -409,6 +458,20 @@ const StreamingMessage: FC<{
             ))}
           </div>
         ) : null}
+
+        {streamingEntities.length > 0 && (
+          <EntityCardPanel cards={streamingEntities} threshold={1} />
+        )}
+
+        {/* 意图澄清卡片（置信度低时显示） */}
+        {clarification && onSelectClarification && (
+          <ClarificationCard
+            question={clarification.question}
+            confidence={clarification.confidence}
+            options={clarification.options}
+            onSelect={onSelectClarification}
+          />
+        )}
       </div>
     </div>
   );
@@ -423,10 +486,14 @@ interface MessageListProps {
   busy: boolean;
   sessionId: string;
   streamingSteps: AgentStep[];
+  streamingEntities?: EntityCard[];
+  pendingClarification?: ClarificationPayload | null;
+  onSelectClarification?: (code: string, name: string) => void;
 }
 
 export const MessageList: FC<MessageListProps> = ({
   messages, streamingText, streamingThinkText, isThinking, busy, sessionId, streamingSteps,
+  streamingEntities, pendingClarification, onSelectClarification,
 }) => {
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -436,16 +503,19 @@ export const MessageList: FC<MessageListProps> = ({
 
   return (
     <div className="flex-1 overflow-y-auto px-4 py-6">
-      <div className="mx-auto max-w-3xl space-y-6">
+      <div className="mx-auto max-w-4xl space-y-6">
         {messages.map((m) => (
           <MessageItem key={m.id} message={m} sessionId={sessionId} />
         ))}
-        {(busy || streamingText || streamingThinkText) && (
+        {(busy || streamingText || streamingThinkText || pendingClarification) && (
           <StreamingMessage
             text={streamingText}
             thinkText={streamingThinkText}
             isThinking={isThinking}
             steps={streamingSteps}
+            streamingEntities={streamingEntities}
+            clarification={pendingClarification}
+            onSelectClarification={onSelectClarification}
           />
         )}
         <div ref={bottomRef} />

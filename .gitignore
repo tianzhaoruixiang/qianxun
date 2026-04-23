@@ -7,5 +7,7 @@
 
 # 编排环境变量（含密钥），保留 .env.example
 docker/.env
+docker/data
 !docker/.env.example
+docker/images**
 

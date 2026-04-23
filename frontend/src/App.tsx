@@ -4,8 +4,8 @@ import {
   PanelLeftClose, PanelLeft,
 } from "lucide-react";
 import {
-  type AgentStep, type ChatMessage, type ChatSession, type CurrentUser,
-  type IntentScenario, type NluAnalysis,
+  type AgentStep, type ChatMessage, type ChatSession, type CurrentUser, type EntityCard,
+  type ClarificationPayload, type IntentScenario, type NluAnalysis,
   createSession, deleteSession, getCurrentUser,
   listIntentScenarios, listMessages, listSessions,
   streamChat, updateSession,
@@ -16,6 +16,7 @@ import { InputBox, type ThinkingMode } from "./components/InputBox";
 import { NluAnalysisCard } from "./components/NluAnalysisCard";
 import { ScenariosModal } from "./components/ScenariosModal";
 import { WelcomeScreen } from "./components/WelcomeScreen";
+import { QIANXUN_APP_CLASSNAME } from "./lib/qianxunConstants";
 import { cn } from "./lib/utils";
 
 export function App() {
@@ -31,11 +32,16 @@ export function App() {
   const [thinkingMode,        setThinkingMode       ] = useState<ThinkingMode>("quick");
   const [lastAnalysis,        setLastAnalysis       ] = useState<NluAnalysis | null>(null);
   const [streamingSteps,      setStreamingSteps     ] = useState<AgentStep[]>([]);
+  const [streamingEntities,   setStreamingEntities  ] = useState<EntityCard[]>([]);
   const [scenarios,           setScenarios          ] = useState<IntentScenario[]>([]);
   const [scenariosOpen,       setScenariosOpen      ] = useState(false);
   const [sidebarOpen,         setSidebarOpen        ] = useState(true);
   const [menuOpen,            setMenuOpen           ] = useState(false);
   const [currentUser,         setCurrentUser        ] = useState<CurrentUser | null>(null);
+  /** 意图澄清状态：置信度低时后端下发，用户选择后清空 */
+  const [pendingClarification, setPendingClarification] = useState<ClarificationPayload | null>(null);
+  /** 流式可能不完整（截断或上游断开）时由后端 stream_warning 下发 */
+  const [streamWarning,       setStreamWarning      ] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
   const activeSession = useMemo(
@@ -151,7 +157,7 @@ export function App() {
     await doSend(activeId, text);
   };
 
-  const doSend = async (sessionId: string, text: string) => {
+  const doSend = async (sessionId: string, text: string, confirmedScenarioCode?: string) => {
     const localUser: ChatMessage = {
       id: `local-${Date.now()}`,
       sessionId,
@@ -168,13 +174,15 @@ export function App() {
     setIsThinking(false);
     setLastAnalysis(null);
     setStreamingSteps([]);
+    setStreamingEntities([]);
     setError(null);
+    setStreamWarning(null);
+    setPendingClarification(null);
 
     try {
       await streamChat(sessionId, text, {
         onAnalysis: (a) => {
           setLastAnalysis(a);
-          // 将 NLU 分析结果也作为一个步骤推送到消息流里
           if (a.scenarioName || a.scenarioCode) {
             setStreamingSteps((prev) => [
               ...prev,
@@ -183,7 +191,6 @@ export function App() {
           }
         },
         onAgentStep: (step) => setStreamingSteps((prev) => {
-          // 工具调用按 toolCallId 去重（同一工具的 args 更新只保留最新）
           if (step.kind === "tool_call") {
             const idx = prev.findIndex(
               (s) => s.kind === "tool_call" && s.toolCallId === step.toolCallId,
@@ -196,31 +203,52 @@ export function App() {
           }
           return [...prev, step];
         }),
+        onClarification: (payload) => {
+          setPendingClarification(payload);
+        },
         onThinkStart: () => setIsThinking(true),
         onThinkToken: (t) => setStreamingThinkText((cur) => cur + t),
         onThinkEnd: () => setIsThinking(false),
         onToken: (t) => setStreamingText((cur) => cur + t),
-        onDone: async () => {
+        onEntities: (cards) => setStreamingEntities(cards),
+        onStreamWarning: (w) => setStreamWarning(w.message),
+        onDone: async (ev) => {
           setStreamingText(""); setStreamingThinkText(""); setIsThinking(false); setBusy(false);
           setStreamingSteps([]);
+          setStreamingEntities([]);
           setMessages(await listMessages(sessionId));
           await refreshSessions();
+          // 若是澄清结果，保留 pendingClarification 直到用户选择
+          if (!ev.clarification) setPendingClarification(null);
         },
         onError: (msg) => {
           setBusy(false); setStreamingText(""); setStreamingThinkText(""); setIsThinking(false);
           setStreamingSteps([]);
+          setStreamingEntities([]);
+          setStreamWarning(null);
           setError(msg);
         },
-      }, thinkingMode);
+      }, thinkingMode, confirmedScenarioCode);
     } catch (e) {
       setBusy(false); setStreamingText(""); setStreamingThinkText(""); setIsThinking(false);
       setStreamingSteps([]);
+      setStreamingEntities([]);
+      setStreamWarning(null);
       setError(e instanceof Error ? e.message : String(e));
     }
   };
 
+  /** 用户在澄清卡片中选择了意图 → 以相同内容重新发送并带上确认的 scenarioCode */
+  const onSelectClarification = useCallback((code: string) => {
+    if (!activeId || !pendingClarification) return;
+    const originalQuery = pendingClarification.originalQuery;
+    setPendingClarification(null);
+    void doSend(activeId, originalQuery, code);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId, pendingClarification]);
+
   return (
-    <div className="flex h-screen overflow-hidden" style={{ background: "#F2F2F7" }}>
+    <div className={cn("flex h-screen overflow-hidden", QIANXUN_APP_CLASSNAME)} style={{ background: "#F2F2F7" }}>
       {/* ── Sidebar ── */}
       <div className={cn(
         "transition-all duration-300 ease-in-out overflow-hidden shrink-0",
@@ -284,20 +312,6 @@ export function App() {
 
           {/* Right actions */}
           <div className="flex items-center gap-1.5 shrink-0">
-            {/* User info */}
-            {currentUser && (
-              <div className="flex items-center gap-2 pl-1 pr-2.5 py-1 rounded-full" style={{ background: "rgba(0,0,0,0.05)" }}>
-                <div
-                  className="w-[22px] h-[22px] rounded-full shrink-0 flex items-center justify-center text-white text-[10px] font-semibold"
-                  style={{ background: "#007AFF" }}
-                >
-                  {currentUser.displayName?.[0]?.toUpperCase() ?? currentUser.username?.[0]?.toUpperCase() ?? "U"}
-                </div>
-                <span className="text-[12px] hidden sm:inline" style={{ color: "rgba(0,0,0,0.60)" }}>
-                  {currentUser.displayName || currentUser.username}
-                </span>
-              </div>
-            )}
             {/* Busy indicator */}
             {busy && (
               <div
@@ -399,6 +413,21 @@ export function App() {
                 )}
               </div>
             )}
+
+            {/* User info */}
+            {currentUser && (
+              <div className="flex items-center gap-2 pl-1 pr-2.5 py-1 rounded-full" style={{ background: "rgba(0,0,0,0.05)" }}>
+                <div
+                  className="w-[22px] h-[22px] rounded-full shrink-0 flex items-center justify-center text-white text-[10px] font-semibold"
+                  style={{ background: "#007AFF" }}
+                >
+                  {currentUser.displayName?.[0]?.toUpperCase() ?? currentUser.username?.[0]?.toUpperCase() ?? "U"}
+                </div>
+                <span className="text-[12px] hidden sm:inline" style={{ color: "rgba(0,0,0,0.60)" }}>
+                  {currentUser.displayName || currentUser.username}
+                </span>
+              </div>
+            )}
           </div>
         </header>
 
@@ -425,6 +454,28 @@ export function App() {
           </div>
         )}
 
+        {streamWarning && (
+          <div
+            className="flex items-center gap-3 mx-4 mt-3 px-4 py-2.5 rounded-[12px] animate-fade-in"
+            style={{
+              background: "rgba(255,149,0,0.09)",
+              border: "1px solid rgba(255,149,0,0.22)",
+            }}
+          >
+            <AlertCircle size={14} style={{ color: "#FF9500", flexShrink: 0 }} />
+            <span className="flex-1 text-[12.5px]" style={{ color: "rgba(140,70,0,0.92)" }}>{streamWarning}</span>
+            <button
+              type="button"
+              onClick={() => setStreamWarning(null)}
+              style={{ color: "rgba(140,70,0,0.45)", flexShrink: 0 }}
+              onMouseEnter={(e) => (e.currentTarget as HTMLElement).style.color = "#FF9500"}
+              onMouseLeave={(e) => (e.currentTarget as HTMLElement).style.color = "rgba(140,70,0,0.45)"}
+            >
+              <X size={13} />
+            </button>
+          </div>
+        )}
+
         {/* Chat area */}
         <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
           {!activeId ? (
@@ -445,6 +496,9 @@ export function App() {
                   busy={busy}
                   sessionId={activeId}
                   streamingSteps={streamingSteps}
+                  streamingEntities={streamingEntities}
+                  pendingClarification={pendingClarification}
+                  onSelectClarification={onSelectClarification}
                 />
               </div>
               <InputBox

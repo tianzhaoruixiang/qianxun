@@ -1,8 +1,8 @@
 package com.qianxun.web;
 
 import com.qianxun.context.UserContext;
-import com.qianxun.service.QianXunChatSessionService;
-import com.qianxun.service.QianXunChatStreamService;
+import com.qianxun.service.QianXunServiceChatSession;
+import com.qianxun.service.QianXunServiceChatStream;
 import com.qianxun.web.dto.StreamChatRequest;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -17,16 +17,16 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import java.util.concurrent.Executor;
 
 @RestController
-@RequestMapping("/api/sessions/{sessionId}/chat")
+@RequestMapping("/QianXunService/sessions/{sessionId}/chat")
 public class ChatStreamController {
 
-    private final QianXunChatStreamService chatStreamService;
-    private final QianXunChatSessionService chatSessionService;
+    private final QianXunServiceChatStream chatStreamService;
+    private final QianXunServiceChatSession chatSessionService;
     private final Executor sseExecutor;
 
     public ChatStreamController(
-            QianXunChatStreamService chatStreamService,
-            QianXunChatSessionService chatSessionService,
+            QianXunServiceChatStream chatStreamService,
+            QianXunServiceChatSession chatSessionService,
             @Qualifier("sseExecutor") Executor sseExecutor
     ) {
         this.chatStreamService = chatStreamService;
@@ -46,7 +46,9 @@ public class ChatStreamController {
         SseEmitter emitter = new SseEmitter(0L);
         // 将 userId 和 deepMode 显式传入 SSE 工作线程，因为 ThreadLocal 不跨线程
         boolean deepMode = request.isDeep();
-        sseExecutor.execute(() -> chatStreamService.streamAnswer(userId, sessionId, request.content(), deepMode, emitter));
+        String confirmedScenarioCode = request.confirmedScenarioCode();
+        sseExecutor.execute(() -> chatStreamService.streamAnswer(
+                userId, sessionId, request.content(), deepMode, confirmedScenarioCode, emitter));
         return emitter;
     }
 }

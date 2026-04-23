@@ -3,6 +3,8 @@ package com.qianxun.llm;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.qianxun.config.QianxunProperties;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.io.BufferedReader;
@@ -21,6 +23,11 @@ import java.util.Map;
 
 @Component
 public class OpenAiCompatibleStreamClient {
+
+    private static final Logger log = LoggerFactory.getLogger(OpenAiCompatibleStreamClient.class);
+
+    /** 流式结束元数据：是否收到 [DONE]、最后一帧的 finish_reason（如 length/stop） */
+    public record StreamCompletionMeta(boolean sawDone, String finishReason) {}
 
     private static final HttpClient HTTP_CLIENT = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(30))
@@ -83,22 +90,26 @@ public class OpenAiCompatibleStreamClient {
     /**
      * OpenAI 兼容：流式 chat completions（用于 Hermes Agent / vLLM / OpenAI 等）。
      * <p>
-     * toolCallListener 可为 null，当 delta 含 tool_calls 时调用（Hermes 执行 function calling 时触发）。
+     * toolCallListener 可为 null：
+     * - 当 delta 含 tool_calls 时调用（Hermes 执行 function calling 时触发）
+     * - 当 SSE 事件为 hermes.tool.* 时调用（Hermes 工具进度/结果透传）
      */
-    public void streamChatCompletions(
+    public StreamCompletionMeta streamChatCompletions(
             String baseUrl,
             String apiKey,
             String model,
             List<Map<String, String>> messages,
             StreamTokenConsumer consumer
     ) throws Exception {
-        streamChatCompletions(baseUrl, apiKey, model, messages, consumer, null);
+        return streamChatCompletions(baseUrl, apiKey, model, messages, consumer, null);
     }
 
     /**
      * OpenAI 兼容：流式 chat completions，带工具调用回调。
+     *
+     * @return 是否收到 [DONE]、以及最后一帧的 finish_reason（如 length 表示可能因 max_tokens 截断）
      */
-    public void streamChatCompletions(
+    public StreamCompletionMeta streamChatCompletions(
             String baseUrl,
             String apiKey,
             String model,
@@ -108,16 +119,19 @@ public class OpenAiCompatibleStreamClient {
     ) throws Exception {
         String url = trimTrailingSlash(baseUrl) + "/chat/completions";
 
-        Map<String, Object> body = Map.of(
-                "model", model,
-                "messages", messages,
-                "stream", true
-        );
+        int maxTok = Math.max(256, properties.getLlm().getMaxTokens());
+        LinkedHashMap<String, Object> body = new LinkedHashMap<>();
+        body.put("model", model);
+        body.put("messages", messages);
+        body.put("stream", true);
+        body.put("max_tokens", maxTok);
         String json = objectMapper.writeValueAsString(body);
+
+        int timeoutSec = Math.max(60, properties.getLlm().getStreamTimeoutSeconds());
 
         HttpRequest.Builder b = HttpRequest.newBuilder()
                 .uri(URI.create(url))
-                .timeout(Duration.ofMinutes(10))
+                .timeout(Duration.ofSeconds(timeoutSec))
                 .header("Content-Type", "application/json")
                 .header("Accept", "text/event-stream")
                 .POST(HttpRequest.BodyPublishers.ofString(json));
@@ -133,71 +147,154 @@ public class OpenAiCompatibleStreamClient {
         record ToolCallAcc(StringBuilder name, StringBuilder args) {}
         java.util.Map<Integer, ToolCallAcc> tcAccMap = new java.util.LinkedHashMap<>();
 
+        boolean sawDone = false;
+        String lastFinishReason = null;
+        int hermesToolSeq = 0;
+
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(response.body(), StandardCharsets.UTF_8))) {
             String line;
+            String eventName = "message";
+            StringBuilder dataBuf = new StringBuilder();
             while ((line = reader.readLine()) != null) {
                 if (line.isBlank()) {
-                    continue;
-                }
-                if (!line.startsWith("data:")) {
-                    continue;
-                }
-                String payload = line.substring("data:".length()).trim();
-                if ("[DONE]".equalsIgnoreCase(payload)) {
-                    return;
-                }
-                JsonNode root = objectMapper.readTree(payload);
-                JsonNode errNode = root.path("error");
-                if (!errNode.isMissingNode() && errNode.isObject()) {
-                    throw new IllegalStateException("LLM 返回错误: " + errNode);
-                }
-                JsonNode choices = root.path("choices");
-                if (!choices.isArray() || choices.isEmpty()) {
-                    continue;
-                }
-                JsonNode delta = choices.get(0).path("delta");
-
-                // ── 普通文本 token ──
-                JsonNode contentNode = delta.path("content");
-                if (contentNode.isTextual()) {
-                    String token = contentNode.asText();
-                    if (!token.isEmpty()) {
-                        consumer.onToken(token);
+                    if (dataBuf.length() == 0) {
+                        eventName = "message";
+                        continue;
                     }
-                }
 
-                // ── 工具调用 delta ──
-                if (toolCallListener != null) {
-                    JsonNode toolCalls = delta.path("tool_calls");
-                    if (toolCalls.isArray()) {
-                        for (JsonNode tc : toolCalls) {
-                            int idx = tc.path("index").asInt(0);
-                            ToolCallAcc acc = tcAccMap.computeIfAbsent(idx,
-                                    k -> new ToolCallAcc(new StringBuilder(), new StringBuilder()));
+                    String payload = dataBuf.toString().trim();
+                    dataBuf.setLength(0);
+                    String currentEvent = eventName;
+                    eventName = "message";
 
-                            String id    = tc.path("id").asText(null);
-                            JsonNode fn  = tc.path("function");
-                            String fname = fn.path("name").asText(null);
-                            String fargs = fn.path("arguments").asText(null);
+                    if ("[DONE]".equalsIgnoreCase(payload)) {
+                        sawDone = true;
+                        break;
+                    }
 
-                            if (fname != null && !fname.isEmpty()) {
-                                acc.name().append(fname);
-                            }
-                            if (fargs != null) {
-                                acc.args().append(fargs);
-                            }
+                    // Hermes 自定义工具事件（例如 hermes.tool.progress）
+                    if (toolCallListener != null && currentEvent.startsWith("hermes.tool.")) {
+                        String toolName = "hermes_tool";
+                        String toolId = null;
+                        try {
+                            JsonNode n = objectMapper.readTree(payload);
+                            toolName = n.path("tool").asText(toolName);
+                            toolId = n.path("id").asText(null);
+                        } catch (Exception ignored) {
+                            // payload 不是 JSON 时，直接透传到 argsChunk
+                        }
+                        if (toolId == null || toolId.isBlank()) {
+                            toolId = "hermes_" + toolName + "_" + (++hermesToolSeq);
+                        }
+                        toolCallListener.onToolCall(new ToolCallEvent(toolId, toolName, payload));
+                        continue;
+                    }
 
-                            // 工具名首次完整出现时立刻通知（name 完整出现在第一个包含 name 的 chunk）
-                            if (fname != null && !fname.isEmpty()) {
-                                String toolId = (id != null && !id.isEmpty()) ? id : ("call_" + idx);
-                                toolCallListener.onToolCall(new ToolCallEvent(toolId, acc.name().toString(), acc.args().toString()));
-                            } else if (fargs != null && !fargs.isEmpty() && !acc.name().isEmpty()) {
-                                // 后续只有 args chunk，更新累积参数
-                                String toolId = "call_" + idx;
-                                toolCallListener.onToolCall(new ToolCallEvent(toolId, acc.name().toString(), acc.args().toString()));
+                    JsonNode root = objectMapper.readTree(payload);
+                    JsonNode errNode = root.path("error");
+                    if (!errNode.isMissingNode() && errNode.isObject()) {
+                        throw new IllegalStateException("LLM 返回错误: " + errNode);
+                    }
+                    JsonNode choices = root.path("choices");
+                    if (!choices.isArray() || choices.isEmpty()) {
+                        continue;
+                    }
+                    JsonNode choice0 = choices.get(0);
+                    JsonNode fr = choice0.path("finish_reason");
+                    if (!fr.isMissingNode() && !fr.isNull() && fr.isTextual()) {
+                        String frText = fr.asText();
+                        if (frText != null && !frText.isBlank()) {
+                            lastFinishReason = frText;
+                        }
+                    }
+
+                    JsonNode delta = choice0.path("delta");
+
+                    // ── 普通文本 token（字符串或多段 text） ──
+                    JsonNode contentNode = delta.path("content");
+                    emitContentTokens(contentNode, consumer);
+
+                    // ── 工具调用 delta ──
+                    if (toolCallListener != null) {
+                        JsonNode toolCalls = delta.path("tool_calls");
+                        if (toolCalls.isArray()) {
+                            for (JsonNode tc : toolCalls) {
+                                int idx = tc.path("index").asInt(0);
+                                ToolCallAcc acc = tcAccMap.computeIfAbsent(idx,
+                                        k -> new ToolCallAcc(new StringBuilder(), new StringBuilder()));
+
+                                String id    = tc.path("id").asText(null);
+                                JsonNode fn  = tc.path("function");
+                                String fname = fn.path("name").asText(null);
+                                String fargs = fn.path("arguments").asText(null);
+
+                                if (fname != null && !fname.isEmpty()) {
+                                    acc.name().append(fname);
+                                }
+                                if (fargs != null) {
+                                    acc.args().append(fargs);
+                                }
+
+                                // 工具名首次完整出现时立刻通知（name 完整出现在第一个包含 name 的 chunk）
+                                if (fname != null && !fname.isEmpty()) {
+                                    String toolId = (id != null && !id.isEmpty()) ? id : ("call_" + idx);
+                                    toolCallListener.onToolCall(new ToolCallEvent(toolId, acc.name().toString(), acc.args().toString()));
+                                } else if (fargs != null && !fargs.isEmpty() && !acc.name().isEmpty()) {
+                                    // 后续只有 args chunk，更新累积参数
+                                    String toolId = "call_" + idx;
+                                    toolCallListener.onToolCall(new ToolCallEvent(toolId, acc.name().toString(), acc.args().toString()));
+                                }
                             }
                         }
                     }
+                    continue;
+                }
+                if (line.startsWith("event:")) {
+                    eventName = line.substring("event:".length()).trim();
+                    continue;
+                }
+                if (line.startsWith("data:")) {
+                    if (dataBuf.length() > 0) {
+                        dataBuf.append('\n');
+                    }
+                    dataBuf.append(line.substring("data:".length()).trim());
+                    continue;
+                }
+            }
+        }
+
+        if (!sawDone) {
+            log.warn("LLM 流式响应未收到 [DONE]，连接可能已提前关闭；已输出内容可能不完整");
+        }
+        if ("length".equals(lastFinishReason)) {
+            log.warn("LLM finish_reason=length，可能因 max_tokens 截断。当前 qianxun.llm.max-tokens={}", maxTok);
+        }
+
+        return new StreamCompletionMeta(sawDone, lastFinishReason);
+    }
+
+    private static void emitContentTokens(JsonNode contentNode, StreamTokenConsumer consumer) {
+        if (contentNode == null || contentNode.isNull() || contentNode.isMissingNode()) {
+            return;
+        }
+        if (contentNode.isTextual()) {
+            String token = contentNode.asText();
+            if (!token.isEmpty()) {
+                consumer.onToken(token);
+            }
+            return;
+        }
+        if (contentNode.isArray()) {
+            for (JsonNode part : contentNode) {
+                if (part == null) {
+                    continue;
+                }
+                String t = part.path("text").asText("");
+                if (t.isEmpty() && part.isTextual()) {
+                    t = part.asText("");
+                }
+                if (!t.isEmpty()) {
+                    consumer.onToken(t);
                 }
             }
         }
@@ -211,7 +308,13 @@ public class OpenAiCompatibleStreamClient {
 
         String header = "（千寻 · 本地演示）当前未命中可用的远端推理端点（或显式开启 mock），以下为模拟流式输出。\n\n";
         String body = hermesHint + "你的问题：\n" + userText + "\n\n---\n\n";
-        String full = header + body;
+        String entities = """
+
+                ```qianxun-entities
+                [{"name":"千寻","category":"org","type":"产品","description":"本地演示用占位实体"}]
+                ```
+                """;
+        String full = header + body + entities;
         List<String> chunks = chunkText(full, 8);
         for (String c : chunks) {
             consumer.onToken(c);

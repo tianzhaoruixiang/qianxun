@@ -20,12 +20,12 @@ public class WebConfiguration implements WebMvcConfigurer {
 
     @Override
     public void addInterceptors(@NonNull InterceptorRegistry registry) {
-        registry.addInterceptor(new UserContextInterceptor()).addPathPatterns("/api/**");
+        registry.addInterceptor(new UserContextInterceptor()).addPathPatterns("/QianXunService/**");
     }
 
     @Override
     public void addCorsMappings(@NonNull CorsRegistry registry) {
-        registry.addMapping("/api/**")
+        registry.addMapping("/QianXunService/**")
                 .allowedOrigins(
                         "http://localhost:5173",
                         "http://127.0.0.1:5173",

@@ -38,36 +38,49 @@ docker compose ps
 
 # 等待所有关键服务端口可达（给容器内进程留缓冲时间，避免 verify.sh 跑太快）
 echo
-echo "==> 等待各服务端口可达（最多 60s）..."
+echo "==> 等待各服务端口可达（最多 90s）..."
+# 第 5 个参数：Docker 容器名（可选）。
+# 优先 HTTP 200 探测；若 Docker healthcheck 已显示 healthy，则直接信任，
+# 避免 compose up 期间 iptables DNAT 规则刷新导致端口映射短暂失效。
 wait_port() {
-  local name="$1" host="$2" port="$3"
-  for i in $(seq 1 12); do
-    if curl -fsS --max-time 3 "http://${host}:${port}" >/dev/null 2>&1 || \
-       curl -fsS --max-time 3 "http://${host}:${port}/api/health" >/dev/null 2>&1 || \
-       curl -fsS --max-time 3 "http://${host}:${port}/health" >/dev/null 2>&1 || \
-       curl -o /dev/null -s --max-time 3 "http://${host}:${port}" >/dev/null 2>&1; then
-      echo "  ✓ ${name} 可达"
+  local name="$1" host="$2" port="$3" path="${4:-/}" cname="${5:-}"
+  local url="http://${host}:${port}${path}"
+  for i in $(seq 1 18); do   # 最多 18 × 5s ≈ 90s
+    # 1) HTTP 探测：必须 2xx
+    if curl -fsS --max-time 4 "${url}" >/dev/null 2>&1; then
+      echo "  ✓ ${name} 可达（HTTP 200）"
       return 0
+    fi
+    # 2) 兜底：Docker healthcheck 已通过 → 认为服务可用（iptables 规则可能还在刷新）
+    if [ -n "${cname}" ]; then
+      local h
+      h=$(docker inspect --format='{{.State.Health.Status}}' "${cname}" 2>/dev/null || echo "")
+      if [ "${h}" = "healthy" ]; then
+        echo "  ✓ ${name} 可达（Docker healthcheck: healthy，HTTP 端口映射刷新中）"
+        return 0
+      fi
     fi
     sleep 5
   done
-  echo "  ⚠ ${name} 60s 内未可达，继续验证..."
+  echo "  ⚠ ${name} 90s 内未可达，继续验证..."
 }
-wait_port "Hermes:${HERMES_PORT}"  127.0.0.1 "${HERMES_PORT}"
-wait_port "后端:${BACKEND_PORT}"   127.0.0.1 "${BACKEND_PORT}"
+wait_port "Doris FE"  127.0.0.1 "${DORIS_HTTP}"    "/api/health"   "qianxun-doris-fe"
+wait_port "Hermes"    127.0.0.1 "${HERMES_PORT}"   "/health"       "qianxun-hermes-agent"
+wait_port "后端"      127.0.0.1 "${BACKEND_PORT}"  "/QianXunService/sessions" "qianxun-backend"
+wait_port "前端"      127.0.0.1 "${FRONTEND_PORT}" "/"             "qianxun-frontend"
 
 echo
 echo "==> 服务健康"
 check "Doris FE /api/health"  curl -fsS --max-time 8 "http://127.0.0.1:${DORIS_HTTP}/api/health"
 check "Hermes /health"        curl -fsS --max-time 8 "http://127.0.0.1:${HERMES_PORT}/health"
 check "Hermes /v1/models"     curl -fsS --max-time 8 -H "Authorization: Bearer ${TOKEN}" "http://127.0.0.1:${HERMES_PORT}/v1/models"
-check "后端 /api/sessions"    curl -fsS --max-time 8 "http://127.0.0.1:${BACKEND_PORT}/api/sessions"
+check "后端 /QianXunService/sessions"    curl -fsS --max-time 8 "http://127.0.0.1:${BACKEND_PORT}/QianXunService/sessions"
 check "前端首页 200"           curl -fsS --max-time 8 -o /dev/null "http://127.0.0.1:${FRONTEND_PORT}/"
-check "前端→后端 反向代理"      curl -fsS --max-time 8 "http://127.0.0.1:${FRONTEND_PORT}/api/intent-scenarios"
+check "前端→后端 反向代理"      curl -fsS --max-time 8 "http://127.0.0.1:${FRONTEND_PORT}/QianXunService/intent-scenarios"
 
 echo
 echo "==> 默认意图场景（应该至少包含 org_research / person_research / general）"
-scenario_json=$(curl -sS --max-time 8 "http://127.0.0.1:${BACKEND_PORT}/api/intent-scenarios?enabledOnly=true" 2>&1)
+scenario_json=$(curl -sS --max-time 8 "http://127.0.0.1:${BACKEND_PORT}/QianXunService/intent-scenarios?enabledOnly=true" 2>&1)
 if echo "${scenario_json}" | python3 -c "import sys,json; d=json.load(sys.stdin); print('  共', len(d), '个场景:', [x['code'] for x in d])" 2>/dev/null; then
   :
 else
@@ -76,27 +89,33 @@ fi
 
 echo
 echo "==> 端到端 SSE 流式聊天（最多 ${SSE_TIMEOUT}s，看到 event:analysis / event:token 即视为通过）"
-SID=$(curl -sS -X POST "http://127.0.0.1:${BACKEND_PORT}/api/sessions" -H 'Content-Type: application/json' -d '{}' \
-  | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+SID=$(curl -sS --max-time 10 -X POST "http://127.0.0.1:${BACKEND_PORT}/QianXunService/sessions" \
+  -H 'Content-Type: application/json' -d '{}' \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('id',''))" 2>/dev/null || true)
 echo "  session=${SID}"
-curl -sS -N -X POST "http://127.0.0.1:${BACKEND_PORT}/api/sessions/${SID}/chat/stream" \
-  -H 'Content-Type: application/json' -H 'Accept: text/event-stream' \
-  -d '{"content":"帮我调研一下字节跳动的最新动态"}' \
-  --max-time "${SSE_TIMEOUT}" -o /tmp/qx-sse.out 2>/dev/null || true
-echo "  -- 接收到的 SSE 事件类型："
-grep -E '^event:' /tmp/qx-sse.out | sort -u | sed 's/^/      /'
-echo "  -- analysis 事件："
-grep -A1 '^event:analysis' /tmp/qx-sse.out | sed 's/^/      /' | head -2
-
-HERMES_ENABLED=$(read_env QIANXUN_HERMES_ENABLED true)
-if grep -q '^event:analysis' /tmp/qx-sse.out; then
-  echo "  ✓ NLU analysis 事件命中"
-  pass=$((pass+1))
-elif [ "${HERMES_ENABLED}" = "true" ] || [ "${HERMES_ENABLED}" = "1" ]; then
-  echo "  ✗ 未收到 NLU analysis 事件（Hermes 通常 10~60s，可调大 QIANXUN_VERIFY_SSE_TIMEOUT）"
+if [ -z "${SID}" ]; then
+  echo "  ✗ 无法创建会话（请检查后端日志）"
   fail=$((fail+1))
 else
-  echo "  • Hermes 未启用，跳过 NLU 检查"
+  curl -sS -N -X POST "http://127.0.0.1:${BACKEND_PORT}/QianXunService/sessions/${SID}/chat/stream" \
+    -H 'Content-Type: application/json' -H 'Accept: text/event-stream' \
+    -d '{"content":"帮我调研一下字节跳动的最新动态"}' \
+    --max-time "${SSE_TIMEOUT}" -o /tmp/qx-sse.out 2>/dev/null || true
+  echo "  -- 接收到的 SSE 事件类型："
+  grep -E '^event:' /tmp/qx-sse.out | sort -u | sed 's/^/      /'
+  echo "  -- analysis 事件："
+  grep -A1 '^event:analysis' /tmp/qx-sse.out | sed 's/^/      /' | head -2
+
+  HERMES_ENABLED=$(read_env QIANXUN_HERMES_ENABLED true)
+  if grep -q '^event:analysis' /tmp/qx-sse.out; then
+    echo "  ✓ NLU analysis 事件命中"
+    pass=$((pass+1))
+  elif [ "${HERMES_ENABLED}" = "true" ] || [ "${HERMES_ENABLED}" = "1" ]; then
+    echo "  ✗ 未收到 NLU analysis 事件（Hermes 通常 10~60s，可调大 QIANXUN_VERIFY_SSE_TIMEOUT）"
+    fail=$((fail+1))
+  else
+    echo "  • Hermes 未启用，跳过 NLU 检查"
+  fi
 fi
 
 echo

@@ -1,8 +1,8 @@
 package com.qianxun.web;
 
 import com.qianxun.context.UserContext;
-import com.qianxun.service.QianXunActivityLogService;
-import com.qianxun.service.QianXunChatSessionService;
+import com.qianxun.service.QianXunServiceActivityLog;
+import com.qianxun.service.QianXunServiceChatSession;
 import com.qianxun.web.dto.ActivityLogResponse;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -13,16 +13,16 @@ import java.util.List;
 
 /**
  * 活动日志查询接口（供开发/运营自检优化使用）
- * GET /api/sessions/{sessionId}/activity-logs
+ * GET /QianXunService/sessions/{sessionId}/activity-logs
  */
 @RestController
-@RequestMapping("/api/sessions/{sessionId}/activity-logs")
+@RequestMapping("/QianXunService/sessions/{sessionId}/activity-logs")
 public class ActivityLogController {
 
-    private final QianXunActivityLogService activityLogService;
-    private final QianXunChatSessionService chatSessionService;
+    private final QianXunServiceActivityLog activityLogService;
+    private final QianXunServiceChatSession chatSessionService;
 
-    public ActivityLogController(QianXunActivityLogService activityLogService, QianXunChatSessionService chatSessionService) {
+    public ActivityLogController(QianXunServiceActivityLog activityLogService, QianXunServiceChatSession chatSessionService) {
         this.activityLogService = activityLogService;
         this.chatSessionService = chatSessionService;
     }

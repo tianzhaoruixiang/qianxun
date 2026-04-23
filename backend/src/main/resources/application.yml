@@ -21,6 +21,10 @@ qianxun:
     model: ${QIANXUN_LLM_MODEL:gpt-4o-mini}
     # 未配置 API Key 时走本地模拟流式输出，便于开箱体验
     mock-enabled: ${QIANXUN_LLM_MOCK:true}
+    # 流式补全最大 token（过小会导致回答在句中被截断）
+    max-tokens: ${QIANXUN_LLM_MAX_TOKENS:16384}
+    # JDK HttpClient 单次流式读完整响应体的超时（秒）
+    stream-timeout-seconds: ${QIANXUN_LLM_STREAM_TIMEOUT_SECONDS:3600}
 
   # 深度思考模式：复用 hermes-agent，通过注入 CoT 系统提示词实现深度推理
   # 留空则使用内置默认提示词，无需配置额外模型

@@ -1,6 +1,6 @@
 package com.qianxun.web;
 
-import com.qianxun.service.QianXunIntentScenarioService;
+import com.qianxun.service.QianXunServiceIntentScenario;
 import com.qianxun.web.dto.IntentScenarioResponse;
 import com.qianxun.web.dto.UpsertIntentScenarioRequest;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -16,12 +16,12 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 
 @RestController
-@RequestMapping("/api/intent-scenarios")
+@RequestMapping("/QianXunService/intent-scenarios")
 public class IntentScenarioController {
 
-    private final QianXunIntentScenarioService service;
+    private final QianXunServiceIntentScenario service;
 
-    public IntentScenarioController(QianXunIntentScenarioService service) {
+    public IntentScenarioController(QianXunServiceIntentScenario service) {
         this.service = service;
     }
 

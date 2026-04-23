@@ -1,8 +1,8 @@
 package com.qianxun.web;
 
 import com.qianxun.context.UserContext;
-import com.qianxun.service.QianXunActivityLogService;
-import com.qianxun.service.QianXunChatSessionService;
+import com.qianxun.service.QianXunServiceActivityLog;
+import com.qianxun.service.QianXunServiceChatSession;
 import com.qianxun.web.dto.FeedbackRequest;
 import com.qianxun.web.dto.FeedbackResponse;
 import org.springframework.http.ResponseEntity;
@@ -18,18 +18,18 @@ import java.util.Map;
 
 /**
  * 消息反馈接口（点赞 / 点踩）
- * POST   /api/sessions/{sessionId}/messages/{messageId}/feedback
- * GET    /api/sessions/{sessionId}/messages/{messageId}/feedback
- * DELETE /api/sessions/{sessionId}/messages/{messageId}/feedback
+ * POST   /QianXunService/sessions/{sessionId}/messages/{messageId}/feedback
+ * GET    /QianXunService/sessions/{sessionId}/messages/{messageId}/feedback
+ * DELETE /QianXunService/sessions/{sessionId}/messages/{messageId}/feedback
  */
 @RestController
-@RequestMapping("/api/sessions/{sessionId}/messages/{messageId}/feedback")
+@RequestMapping("/QianXunService/sessions/{sessionId}/messages/{messageId}/feedback")
 public class FeedbackController {
 
-    private final QianXunActivityLogService activityLogService;
-    private final QianXunChatSessionService chatSessionService;
+    private final QianXunServiceActivityLog activityLogService;
+    private final QianXunServiceChatSession chatSessionService;
 
-    public FeedbackController(QianXunActivityLogService activityLogService, QianXunChatSessionService chatSessionService) {
+    public FeedbackController(QianXunServiceActivityLog activityLogService, QianXunServiceChatSession chatSessionService) {
         this.activityLogService = activityLogService;
         this.chatSessionService = chatSessionService;
     }

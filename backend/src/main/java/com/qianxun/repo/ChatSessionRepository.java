@@ -58,7 +58,7 @@ public class ChatSessionRepository {
         );
     }
 
-    /** 内部使用（不验证 userId）：供 QianXunChatStreamService 等内部逻辑使用 */
+    /** 内部使用（不验证 userId）：供 QianXunServiceChatStream 等内部逻辑使用 */
     public Optional<ChatSession> findById(String id) {
         List<ChatSession> list = jdbcTemplate.query(
                 "SELECT `id`,`user_id`,`title`,`created_at`,`updated_at` FROM " + table + " WHERE `id` = ? LIMIT 1",

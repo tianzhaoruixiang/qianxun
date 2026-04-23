@@ -127,6 +127,14 @@ public class QianxunProperties {
         private String apiKey = "";
         private String model = "gpt-4o-mini";
         private boolean mockEnabled = true;
+        /**
+         * 流式 chat/completions 请求的 max_tokens，避免上游默认值过小导致长文在中途被截断。
+         */
+        private int maxTokens = 16384;
+        /**
+         * 单次流式请求从发起到响应体读完的最长等待（秒），含慢速长文生成；过短会导致连接被 JDK HttpClient 提前掐断。
+         */
+        private int streamTimeoutSeconds = 3600;
 
         public String getBaseUrl() { return baseUrl; }
         public void setBaseUrl(String baseUrl) { this.baseUrl = baseUrl; }
@@ -136,6 +144,10 @@ public class QianxunProperties {
         public void setModel(String model) { this.model = model; }
         public boolean isMockEnabled() { return mockEnabled; }
         public void setMockEnabled(boolean mockEnabled) { this.mockEnabled = mockEnabled; }
+        public int getMaxTokens() { return maxTokens; }
+        public void setMaxTokens(int maxTokens) { this.maxTokens = maxTokens; }
+        public int getStreamTimeoutSeconds() { return streamTimeoutSeconds; }
+        public void setStreamTimeoutSeconds(int streamTimeoutSeconds) { this.streamTimeoutSeconds = streamTimeoutSeconds; }
     }
 
     /**

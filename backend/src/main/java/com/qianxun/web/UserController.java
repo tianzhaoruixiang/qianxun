@@ -1,6 +1,6 @@
 package com.qianxun.web;
 
-import com.qianxun.service.QianXunUserService;
+import com.qianxun.service.QianXunServiceUser;
 import com.qianxun.web.dto.UserResponse;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -8,15 +8,15 @@ import org.springframework.web.bind.annotation.RestController;
 
 /**
  * 用户信息接口（暂不含登录，仅返回当前用户信息）
- * GET /api/users/me
+ * GET /QianXunService/users/me
  */
 @RestController
-@RequestMapping("/api/users")
+@RequestMapping("/QianXunService/users")
 public class UserController {
 
-    private final QianXunUserService userService;
+    private final QianXunServiceUser userService;
 
-    public UserController(QianXunUserService userService) {
+    public UserController(QianXunServiceUser userService) {
         this.userService = userService;
     }
 

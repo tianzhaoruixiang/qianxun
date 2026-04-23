@@ -1,6 +1,6 @@
 package com.qianxun.web;
 
-import com.qianxun.service.QianXunChatSessionService;
+import com.qianxun.service.QianXunServiceChatSession;
 import com.qianxun.web.dto.ChatMessageResponse;
 import com.qianxun.web.dto.ChatSessionResponse;
 import com.qianxun.web.dto.CreateSessionRequest;
@@ -18,12 +18,12 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 
 @RestController
-@RequestMapping("/api/sessions")
+@RequestMapping("/QianXunService/sessions")
 public class SessionController {
 
-    private final QianXunChatSessionService chatSessionService;
+    private final QianXunServiceChatSession chatSessionService;
 
-    public SessionController(QianXunChatSessionService chatSessionService) {
+    public SessionController(QianXunServiceChatSession chatSessionService) {
         this.chatSessionService = chatSessionService;
     }
 

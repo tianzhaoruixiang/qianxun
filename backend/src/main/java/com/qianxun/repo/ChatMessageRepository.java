@@ -20,6 +20,7 @@ public class ChatMessageRepository {
             rs.getString("content"),
             rs.getString("thinking_mode"),
             rs.getString("think_content"),
+            rs.getString("entity_cards"),
             toInstant(rs.getTimestamp("created_at"))
     );
 
@@ -34,17 +35,17 @@ public class ChatMessageRepository {
     public void insert(ChatMessage message) {
         jdbcTemplate.update(
                 "INSERT INTO " + table
-                + " (`id`,`session_id`,`role`,`content`,`thinking_mode`,`think_content`,`created_at`)"
-                + " VALUES (?,?,?,?,?,?,?)",
+                + " (`id`,`session_id`,`role`,`content`,`thinking_mode`,`think_content`,`entity_cards`,`created_at`)"
+                + " VALUES (?,?,?,?,?,?,?,?)",
                 message.id(), message.sessionId(), message.role(), message.content(),
-                message.thinkingMode(), message.thinkContent(),
+                message.thinkingMode(), message.thinkContent(), message.entityCardsJson(),
                 Timestamp.from(message.createdAt())
         );
     }
 
     public List<ChatMessage> listBySessionOrderByCreatedAsc(String sessionId, int limit) {
         return jdbcTemplate.query(
-                "SELECT `id`,`session_id`,`role`,`content`,`thinking_mode`,`think_content`,`created_at`"
+                "SELECT `id`,`session_id`,`role`,`content`,`thinking_mode`,`think_content`,`entity_cards`,`created_at`"
                 + " FROM " + table
                 + " WHERE `session_id` = ? ORDER BY `created_at` ASC, `id` ASC LIMIT ?",
                 ROW_MAPPER, sessionId, limit

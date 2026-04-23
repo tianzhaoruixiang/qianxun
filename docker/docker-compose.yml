@@ -4,12 +4,18 @@
 # 验证：./bin/verify.sh
 #
 # 所有可调项集中在同目录 .env（参考 .env.example）
+# 持久化数据目录（bind mount）：./data/
+#   ├── doris/fe/{meta,log}
+#   ├── doris/be/{storage,log}
+#   └── hermes/
 
 name: qianxun
 
 services:
   # ───────────────────────────── Doris FE ─────────────────────────────
   doris-fe:
+    # 官方镜像仅 linux/amd64；在 arm64 主机上必须走 QEMU 模拟，否则易出现 “platform mismatch” 或 FE 段错误退出 139
+    platform: linux/amd64
     image: apache/doris:${DORIS_FE_TAG:-fe-4.0.2}
     container_name: qianxun-doris-fe
     hostname: fe-01
@@ -20,8 +26,8 @@ services:
       - "${DORIS_FE_HTTP_PORT:-8030}:8030"
       - "${DORIS_FE_QUERY_PORT:-9030}:9030"
     volumes:
-      - doris-fe-meta:/opt/apache-doris/fe/doris-meta
-      - doris-fe-log:/opt/apache-doris/fe/log
+      - ./data/doris/fe/meta:/opt/apache-doris/fe/doris-meta
+      - ./data/doris/fe/log:/opt/apache-doris/fe/log
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8030/api/health >/dev/null || exit 1"]
       interval: 10s
@@ -34,6 +40,7 @@ services:
 
   # ───────────────────────────── Doris BE ─────────────────────────────
   doris-be:
+    platform: linux/amd64
     image: apache/doris:${DORIS_BE_TAG:-be-4.0.2}
     container_name: qianxun-doris-be
     hostname: be-01
@@ -46,8 +53,8 @@ services:
     ports:
       - "${DORIS_BE_WEBSERVER_PORT:-8040}:8040"
     volumes:
-      - doris-be-storage:/opt/apache-doris/be/storage
-      - doris-be-log:/opt/apache-doris/be/log
+      - ./data/doris/be/storage:/opt/apache-doris/be/storage
+      - ./data/doris/be/log:/opt/apache-doris/be/log
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8040/api/health >/dev/null || exit 1"]
       interval: 10s
@@ -58,25 +65,9 @@ services:
       qianxun_net:
         ipv4_address: 172.29.80.3
 
-  # ───────────────────── Doris 一次性建库建表 ─────────────────────
-  doris-init:
-    image: mysql:8.0
-    container_name: qianxun-doris-init
-    depends_on:
-      doris-fe:
-        condition: service_healthy
-      doris-be:
-        condition: service_healthy
-    volumes:
-      - ./doris/init.sh:/init.sh:ro
-      - ./doris/init:/init:ro
-    entrypoint: ["bash", "/init.sh"]
-    restart: "no"
-    networks:
-      - qianxun_net
-
   # ─────────────────────────── Hermes Agent ───────────────────────────
   hermes-agent:
+    platform: linux/amd64
     image: ${HERMES_IMAGES:-nousresearch/hermes-agent:latest}
     container_name: qianxun-hermes-agent
     restart: unless-stopped
@@ -91,11 +82,12 @@ services:
       # Kimi / Moonshot（中国站默认 https://api.moonshot.cn/v1）
       - KIMI_API_KEY=${KIMI_API_KEY:-}
       - KIMI_BASE_URL=${KIMI_BASE_URL:-https://api.moonshot.cn/v1}
+      # Tavily：Hermes 的 web_search / web_extract 等（与 ~/.hermes 文档一致，可用环境变量注入）
+      - TAVILY_API_KEY=${TAVILY_API_KEY:-}
     ports:
       - "${HERMES_API_PORT:-8642}:8642"
     volumes:
-      - hermes-data:/opt/data
-      - ./hermes/config.yaml:/opt/data/config.yaml:ro
+      - ./data/hermes:/opt/data
     shm_size: 1g
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8642/health', timeout=3)"]
@@ -118,9 +110,12 @@ services:
     build:
       context: ..
       dockerfile: docker/backend.Dockerfile
+    restart: on-failure
     depends_on:
-      doris-init:
-        condition: service_completed_successfully
+      doris-fe:
+        condition: service_healthy
+      doris-be:
+        condition: service_healthy
       hermes-agent:
         condition: service_started
     environment:
@@ -140,11 +135,13 @@ services:
       - QIANXUN_LLM_BASE_URL=${QIANXUN_LLM_BASE_URL:-https://api.openai.com/v1}
       - QIANXUN_LLM_MODEL=${QIANXUN_LLM_MODEL:-gpt-4o-mini}
       - QIANXUN_LLM_MOCK=${QIANXUN_LLM_MOCK:-true}
+      - QIANXUN_LLM_MAX_TOKENS=${QIANXUN_LLM_MAX_TOKENS:-16384}
+      - QIANXUN_LLM_STREAM_TIMEOUT_SECONDS=${QIANXUN_LLM_STREAM_TIMEOUT_SECONDS:-3600}
       - JAVA_TOOL_OPTIONS=${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=75 -XX:+UseG1GC}
     ports:
       - "${QIANXUN_BACKEND_PORT:-8080}:8080"
     healthcheck:
-      test: ["CMD", "wget", "-qO/dev/null", "http://127.0.0.1:8080/api/sessions"]
+      test: ["CMD", "wget", "-qO/dev/null", "http://127.0.0.1:8080/QianXunService/sessions"]
       interval: 5s
       timeout: 5s
       retries: 60
@@ -159,11 +156,18 @@ services:
     build:
       context: ..
       dockerfile: docker/frontend.Dockerfile
+    restart: unless-stopped
     depends_on:
       qianxun-backend:
         condition: service_started
     ports:
       - "${QIANXUN_FRONTEND_PORT:-5173}:80"
+    healthcheck:
+      test: ["CMD", "wget", "-qO/dev/null", "http://127.0.0.1/"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
     networks:
       - qianxun_net
 
@@ -177,10 +181,3 @@ networks:
         - subnet: ${DORIS_SUBNET:-172.29.80.0/24}
           ip_range: ${DORIS_IP_RANGE:-172.29.80.128/25}
           gateway: ${DORIS_GATEWAY:-172.29.80.1}
-
-volumes:
-  doris-fe-meta:
-  doris-fe-log:
-  doris-be-storage:
-  doris-be-log:
-  hermes-data:

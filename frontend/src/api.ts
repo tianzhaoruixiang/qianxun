@@ -1,3 +1,8 @@
+import { parseStructuredEntityCards, type EntityCard } from "./lib/entityExtractor";
+import { qianxunStorageKey } from "./lib/qianxunConstants";
+
+export type { EntityCard };
+
 export type ChatSession = {
   id: string;
   title: string;
@@ -13,6 +18,8 @@ export type ChatMessage = {
   thinkingMode: "quick" | "deep" | null;
   thinkContent: string | null;
   createdAt: string;
+  /** 助手消息：由后端解析 qianxun-entities 块得到的结构化实体 */
+  entityCards?: EntityCard[];
 };
 
 // ── 用户身份（由外部系统通过 localStorage 注入，后续可替换为 JWT/OAuth）──────
@@ -35,9 +42,9 @@ const DEFAULT_USER: CurrentUser = {
 
 function getStoredUser(): { id: string; name: string; displayName: string } {
   try {
-    const id          = localStorage.getItem("qianxun_user_id")          ?? DEFAULT_USER.id;
-    const name        = localStorage.getItem("qianxun_user_name")        ?? DEFAULT_USER.username;
-    const displayName = localStorage.getItem("qianxun_user_display_name") ?? DEFAULT_USER.displayName;
+    const id          = localStorage.getItem(qianxunStorageKey("user_id"))          ?? DEFAULT_USER.id;
+    const name        = localStorage.getItem(qianxunStorageKey("user_name"))        ?? DEFAULT_USER.username;
+    const displayName = localStorage.getItem(qianxunStorageKey("user_display_name")) ?? DEFAULT_USER.displayName;
     return { id, name, displayName };
   } catch {
     return { id: DEFAULT_USER.id, name: DEFAULT_USER.username, displayName: DEFAULT_USER.displayName };
@@ -47,7 +54,7 @@ function getStoredUser(): { id: string; name: string; displayName: string } {
 /** 从后端获取当前用户信息（后端从请求头中读取，无数据库查询） */
 export async function getCurrentUser(): Promise<CurrentUser> {
   try {
-    return await http<CurrentUser>("/api/users/me");
+    return await http<CurrentUser>("/QianXunService/users/me");
   } catch {
     return DEFAULT_USER;
   }
@@ -74,22 +81,22 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export async function listSessions(): Promise<ChatSession[]> {
-  return http<ChatSession[]>("/api/sessions");
+  return http<ChatSession[]>("/QianXunService/sessions");
 }
 
 export async function createSession(title?: string): Promise<ChatSession> {
-  return http<ChatSession>("/api/sessions", {
+  return http<ChatSession>("/QianXunService/sessions", {
     method: "POST",
     body: JSON.stringify({ title: title ?? null }),
   });
 }
 
 export async function getSession(id: string): Promise<ChatSession> {
-  return http<ChatSession>(`/api/sessions/${encodeURIComponent(id)}`);
+  return http<ChatSession>(`/QianXunService/sessions/${encodeURIComponent(id)}`);
 }
 
 export async function updateSession(id: string, title: string): Promise<ChatSession> {
-  return http<ChatSession>(`/api/sessions/${encodeURIComponent(id)}`, {
+  return http<ChatSession>(`/QianXunService/sessions/${encodeURIComponent(id)}`, {
     method: "PATCH",
     body: JSON.stringify({ title }),
   });
@@ -97,7 +104,7 @@ export async function updateSession(id: string, title: string): Promise<ChatSess
 
 export async function deleteSession(id: string): Promise<void> {
   const { id: userId, name: userName, displayName } = getStoredUser();
-  const res = await fetch(`/api/sessions/${encodeURIComponent(id)}`, {
+  const res = await fetch(`/QianXunService/sessions/${encodeURIComponent(id)}`, {
     method: "DELETE",
     headers: {
       "X-User-Id":           encodeURIComponent(userId),
@@ -111,8 +118,22 @@ export async function deleteSession(id: string): Promise<void> {
   }
 }
 
+type ApiChatMessageRow = Omit<ChatMessage, "entityCards"> & { entityCards?: string };
+
 export async function listMessages(sessionId: string): Promise<ChatMessage[]> {
-  return http<ChatMessage[]>(`/api/sessions/${encodeURIComponent(sessionId)}/messages`);
+  const rows = await http<ApiChatMessageRow[]>(`/QianXunService/sessions/${encodeURIComponent(sessionId)}/messages`);
+  return rows.map((r) => {
+    const { entityCards: ecRaw, ...rest } = r;
+    if (typeof ecRaw === "string" && ecRaw.trim()) {
+      try {
+        const parsed = parseStructuredEntityCards(JSON.parse(ecRaw) as unknown);
+        return { ...rest, entityCards: parsed.length > 0 ? parsed : undefined };
+      } catch {
+        return { ...rest };
+      }
+    }
+    return { ...rest };
+  });
 }
 
 export type NluAnalysis = {
@@ -152,7 +173,7 @@ export type IntentScenario = {
 
 export async function listIntentScenarios(enabledOnly = false): Promise<IntentScenario[]> {
   return http<IntentScenario[]>(
-    `/api/intent-scenarios${enabledOnly ? "?enabledOnly=true" : ""}`,
+    `/QianXunService/intent-scenarios${enabledOnly ? "?enabledOnly=true" : ""}`,
   );
 }
 
@@ -176,7 +197,7 @@ export async function submitFeedback(
   feedbackNote?: string,
 ): Promise<MessageFeedback> {
   return http<MessageFeedback>(
-    `/api/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/feedback`,
+    `/QianXunService/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/feedback`,
     {
       method: "POST",
       body: JSON.stringify({ feedbackType, feedbackNote: feedbackNote ?? null }),
@@ -189,7 +210,7 @@ export async function getFeedback(
   messageId: string,
 ): Promise<MessageFeedback | null> {
   const res = await fetch(
-    `/api/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/feedback`,
+    `/QianXunService/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/feedback`,
     { headers: { Accept: "application/json" } },
   );
   if (res.status === 204) return null;
@@ -199,22 +220,50 @@ export async function getFeedback(
 
 export async function deleteFeedback(sessionId: string, messageId: string): Promise<void> {
   await fetch(
-    `/api/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/feedback`,
+    `/QianXunService/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/feedback`,
     { method: "DELETE" },
   );
 }
+
+/** 意图澄清选项（置信度低时后端下发） */
+export type ClarificationOption = {
+  code: string;
+  name: string;
+  description: string;
+  /** 是否为 NLU 已检测到的候选场景 */
+  detected: boolean;
+};
+
+export type ClarificationPayload = {
+  question: string;
+  originalQuery: string;
+  confidence: number;
+  options: ClarificationOption[];
+};
+
+export type StreamWarningPayload = {
+  message: string;
+  finishReason?: string;
+  sawDone?: boolean;
+};
 
 export type StreamHandlers = {
   onToken: (text: string) => void;
   onThinkToken?: (text: string) => void;
   onThinkStart?: () => void;
   onThinkEnd?: (thinkContent: string) => void;
-  onDone: (payload: { assistantMessageId: string; sessionId: string }) => void;
+  /** 流式结束前下发的结构化实体（与入库字段一致） */
+  onEntities?: (cards: EntityCard[]) => void;
+  /** 上游截断或未正常结束 [DONE] 时由后端提示 */
+  onStreamWarning?: (payload: StreamWarningPayload) => void;
+  onDone: (payload: { assistantMessageId: string; sessionId: string; clarification?: boolean }) => void;
   onError: (message: string) => void;
   /** Hermes / NLU：在 token 流开始前下发的意图与槽位 */
   onAnalysis?: (payload: NluAnalysis) => void;
   /** 代理步骤（agent_skill 调用、tool_call 等） */
   onAgentStep?: (step: AgentStep) => void;
+  /** 意图置信度低时，后端要求用户从候选场景中明确意图 */
+  onClarification?: (payload: ClarificationPayload) => void;
 };
 
 /** 代理步骤事件（用于展示处理过程中的中间步骤） */
@@ -227,11 +276,12 @@ export async function streamChat(
   content: string,
   handlers: StreamHandlers,
   thinkingMode: "quick" | "deep" = "quick",
+  confirmedScenarioCode?: string,
 ): Promise<void> {
   let sawDone = false;
   let sawError = false;
   const { id: userId, name: userName, displayName } = getStoredUser();
-  const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/chat/stream`, {
+  const res = await fetch(`/QianXunService/sessions/${encodeURIComponent(sessionId)}/chat/stream`, {
     method: "POST",
     headers: {
       Accept: "text/event-stream",
@@ -240,7 +290,11 @@ export async function streamChat(
       "X-User-Name":         encodeURIComponent(userName),
       "X-User-Display-Name": encodeURIComponent(displayName),
     },
-    body: JSON.stringify({ content, thinkingMode }),
+    body: JSON.stringify({
+      content,
+      thinkingMode,
+      ...(confirmedScenarioCode ? { confirmedScenarioCode } : {}),
+    }),
   });
 
   if (!res.ok || !res.body) {
@@ -371,13 +425,68 @@ export async function streamChat(
 
       if (eventName === "done") {
         try {
-          const obj = JSON.parse(dataText) as { assistantMessageId?: string; sessionId?: string };
+          const obj = JSON.parse(dataText) as { assistantMessageId?: string; sessionId?: string; clarification?: boolean };
           if (obj.assistantMessageId && obj.sessionId) {
             sawDone = true;
-            handlers.onDone({ assistantMessageId: obj.assistantMessageId, sessionId: obj.sessionId });
+            handlers.onDone({
+              assistantMessageId: obj.assistantMessageId,
+              sessionId: obj.sessionId,
+              clarification: obj.clarification ?? false,
+            });
           }
         } catch {
           handlers.onError("无法解析 done 事件");
+        }
+        continue;
+      }
+
+      if (eventName === "entities") {
+        if (handlers.onEntities) {
+          try {
+            const obj = JSON.parse(dataText) as { itemsJson?: string };
+            const raw = obj.itemsJson ?? "[]";
+            const arr = JSON.parse(raw) as unknown;
+            handlers.onEntities(parseStructuredEntityCards(arr));
+          } catch {
+            handlers.onEntities([]);
+          }
+        }
+        continue;
+      }
+
+      if (eventName === "stream_warning") {
+        if (handlers.onStreamWarning) {
+          try {
+            const obj = JSON.parse(dataText) as Partial<StreamWarningPayload>;
+            if (obj.message) {
+              handlers.onStreamWarning({
+                message: obj.message,
+                finishReason: obj.finishReason,
+                sawDone: typeof obj.sawDone === "boolean" ? obj.sawDone : undefined,
+              });
+            }
+          } catch {
+            // ignore
+          }
+        }
+        continue;
+      }
+
+      if (eventName === "clarification") {
+        if (handlers.onClarification) {
+          try {
+            const obj = JSON.parse(dataText) as Partial<ClarificationPayload>;
+            if (obj.options && obj.question) {
+              handlers.onClarification({
+                question: obj.question,
+                originalQuery: obj.originalQuery ?? "",
+                confidence: typeof obj.confidence === "number" ? obj.confidence : 0,
+                options: obj.options,
+              });
+            }
+          } catch {
+            // ignore malformed clarification
+          }
         }
         continue;
       }

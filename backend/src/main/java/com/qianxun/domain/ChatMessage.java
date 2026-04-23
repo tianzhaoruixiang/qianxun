@@ -11,6 +11,8 @@ public record ChatMessage(
         String thinkingMode,
         /** 仅 deep 模式 assistant 消息：<think>...</think> 块的原始内容，已去除标签 */
         String thinkContent,
+        /** assistant：结构化实体 JSON 数组文本（由模型 qianxun-entities 块解析得到），可为 null */
+        String entityCardsJson,
         Instant createdAt
 ) {
     public static final String MODE_QUICK = "quick";

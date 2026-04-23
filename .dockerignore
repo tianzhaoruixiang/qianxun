@@ -1,11 +1,14 @@
 **/target/
 **/node_modules/
 **/dist/
+# 允许将已构建的前端产物打进「仅 nginx」镜像（见 docker/frontend.static.Dockerfile）
+!frontend/dist/
 **/.git/
 **/.idea/
 **/.vscode/
 **/.DS_Store
 **/.gradle/
 docker/.env
+docker/data/
 hermes/data/
 *.log
