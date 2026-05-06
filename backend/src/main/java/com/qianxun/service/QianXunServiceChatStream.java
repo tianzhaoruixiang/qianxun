@@ -336,7 +336,7 @@ public class QianXunServiceChatStream {
         }
     }
 
-    private void sendAnalysis(SseEmitter emitter, IntentSlotUnderstanding u) {
+    private Map<String, Object> buildAnalysisPayload(IntentSlotUnderstanding u) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("intent", u.intent());
         payload.put("scenarioCode", u.scenarioCode());
@@ -346,7 +346,11 @@ public class QianXunServiceChatStream {
         payload.put("missingRequiredSlots", u.safeMissingRequiredSlots());
         payload.put("confidence", u.confidence());
         payload.put("reasoning", u.reasoning() == null ? "" : u.reasoning());
-        sendEvent(emitter, "analysis", payload);
+        return payload;
+    }
+
+    private void sendAnalysis(SseEmitter emitter, IntentSlotUnderstanding u) {
+        sendEvent(emitter, "analysis", buildAnalysisPayload(u));
     }
 
     private List<Map<String, String>> augmentWithScenarioAndNlu(
@@ -631,6 +635,8 @@ public class QianXunServiceChatStream {
         private final StringBuilder responseText = new StringBuilder();
         private final StringBuilder thinkText    = new StringBuilder();
         private IntentScenario scenario;
+        /** NLU 阶段的意图分析 JSON，写入 assistant 消息 */
+        private String intentAnalysisJson;
 
         StreamContext(SseEmitter emitter, ChatActivityLog.Builder logBuilder, boolean deepMode) {
             this.emitter = emitter;
@@ -642,6 +648,8 @@ public class QianXunServiceChatStream {
         boolean deepMode()      { return deepMode; }
         IntentScenario scenario()    { return scenario; }
         void setScenario(IntentScenario s) { this.scenario = s; }
+        String intentAnalysisJson() { return intentAnalysisJson; }
+        void setIntentAnalysisJson(String json) { this.intentAnalysisJson = json; }
     }
 
     // ── 各阶段拆分方法 ─────────────────────────────────────────────────────────
@@ -685,6 +693,11 @@ public class QianXunServiceChatStream {
         IntentScenario scenario = understanding.scenario();
         fillNluFields(ctx.logBuilder(), understanding);
         sendAnalysis(ctx.emitter(), understanding);
+        try {
+            ctx.setIntentAnalysisJson(objectMapper.writeValueAsString(buildAnalysisPayload(understanding)));
+        } catch (Exception ex) {
+            log.debug("intent analysis JSON 序列化失败（忽略）: {}", ex.toString());
+        }
         if (understanding.agentSkill() != null && !understanding.agentSkill().isBlank()) {
             sendEvent(ctx.emitter(), "agent_step", Map.of(
                     "type", "agent_skill",
@@ -708,7 +721,7 @@ public class QianXunServiceChatStream {
         var saved = sessionService.appendAssistantMessage(
                 sessionId, msg,
                 ctx.deepMode() ? ChatMessage.MODE_DEEP : ChatMessage.MODE_QUICK,
-                null, null
+                null, null, null
         );
         ctx.logBuilder().assistantMessageId(saved.id())
                         .status(ChatActivityLog.STATUS_MOCK)
@@ -805,7 +818,7 @@ public class QianXunServiceChatStream {
         var saved = sessionService.appendAssistantMessage(
                 sessionId, answer,
                 ctx.deepMode() ? ChatMessage.MODE_DEEP : ChatMessage.MODE_QUICK,
-                think, entities
+                think, entities, ctx.intentAnalysisJson()
         );
         ctx.logBuilder().assistantMessageId(saved.id())
                         .totalDurationMs(System.currentTimeMillis());

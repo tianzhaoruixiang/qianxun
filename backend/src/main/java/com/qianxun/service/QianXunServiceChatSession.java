@@ -48,19 +48,27 @@ public class QianXunServiceChatSession {
                 : request.title().trim();
         ChatSession session = new ChatSession(id, userId, title, now, now);
         sessionRepository.insert(session);
-        return toResponse(session);
+        return ChatSessionResponse.basic(session);
     }
 
     public List<ChatSessionResponse> list() {
         String userId = UserContext.getCurrentUserId();
-        return sessionRepository.listByUserIdOrderByUpdatedDesc(userId, MAX_LIST)
-                .stream().map(QianXunServiceChatSession::toResponse).toList();
+        return sessionRepository.listByUserIdWithStatsOrderByUpdatedDesc(userId, MAX_LIST).stream()
+                .map(row -> new ChatSessionResponse(
+                        row.id(),
+                        row.title(),
+                        row.createdAt(),
+                        row.updatedAt(),
+                        clampCount(row.messageCount()),
+                        preview(row.lastMessagePreview())
+                ))
+                .toList();
     }
 
     public ChatSessionResponse get(String id) {
         String userId = UserContext.getCurrentUserId();
         return sessionRepository.findByIdAndUserId(id, userId)
-                .map(QianXunServiceChatSession::toResponse)
+                .map(ChatSessionResponse::basic)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "会话不存在"));
     }
 
@@ -71,12 +79,12 @@ public class QianXunServiceChatSession {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "会话不存在"));
         if (request == null || request.title() == null || request.title().isBlank()) {
             return sessionRepository.findByIdAndUserId(id, userId)
-                    .map(QianXunServiceChatSession::toResponse).orElseThrow();
+                    .map(ChatSessionResponse::basic).orElseThrow();
         }
         Instant now = Instant.now();
         sessionRepository.updateTitle(id, userId, request.title().trim(), now);
         return sessionRepository.findByIdAndUserId(id, userId)
-                .map(QianXunServiceChatSession::toResponse).orElseThrow();
+                .map(ChatSessionResponse::basic).orElseThrow();
     }
 
     @Transactional
@@ -120,7 +128,7 @@ public class QianXunServiceChatSession {
         Instant now = Instant.now();
         String id   = newId();
         ChatMessage message = new ChatMessage(
-                id, sessionId, "user", content, ChatMessage.MODE_QUICK, null, null, now
+                id, sessionId, "user", content, ChatMessage.MODE_QUICK, null, null, null, now
         );
         messageRepository.insert(message);
         sessionRepository.touchUpdatedAt(sessionId, now);
@@ -130,12 +138,17 @@ public class QianXunServiceChatSession {
 
     @Transactional
     public ChatMessage appendAssistantMessage(
-            String sessionId, String content, String thinkingMode, String thinkContent, String entityCardsJson
+            String sessionId,
+            String content,
+            String thinkingMode,
+            String thinkContent,
+            String entityCardsJson,
+            String intentAnalysisJson
     ) {
         Instant now = Instant.now();
         String id   = newId();
         ChatMessage message = new ChatMessage(
-                id, sessionId, "assistant", content, thinkingMode, thinkContent, entityCardsJson, now
+                id, sessionId, "assistant", content, thinkingMode, thinkContent, entityCardsJson, intentAnalysisJson, now
         );
         messageRepository.insert(message);
         sessionRepository.touchUpdatedAt(sessionId, now);
@@ -156,19 +169,37 @@ public class QianXunServiceChatSession {
         }
     }
 
-    private static ChatSessionResponse toResponse(ChatSession s) {
-        return new ChatSessionResponse(s.id(), s.title(), s.createdAt(), s.updatedAt());
-    }
-
     private static ChatMessageResponse toMessageResponse(ChatMessage m) {
         String entityJson = "assistant".equals(m.role()) ? m.entityCardsJson() : null;
         if (entityJson != null && entityJson.isBlank()) {
             entityJson = null;
         }
+        String intentJson = "assistant".equals(m.role()) ? m.intentAnalysisJson() : null;
+        if (intentJson != null && intentJson.isBlank()) {
+            intentJson = null;
+        }
         return new ChatMessageResponse(
                 m.id(), m.sessionId(), m.role(), m.content(),
-                m.thinkingMode(), m.thinkContent(), entityJson, m.createdAt()
+                m.thinkingMode(), m.thinkContent(), entityJson, intentJson, m.createdAt()
         );
+    }
+
+    private static int clampCount(long c) {
+        if (c > Integer.MAX_VALUE) {
+            return Integer.MAX_VALUE;
+        }
+        return (int) c;
+    }
+
+    private static String preview(String content) {
+        if (content == null || content.isBlank()) {
+            return "";
+        }
+        String t = content.replace('\r', ' ').replace('\n', ' ').trim();
+        if (t.length() > 120) {
+            return t.substring(0, 120) + "…";
+        }
+        return t;
     }
 
     private static String newId() {

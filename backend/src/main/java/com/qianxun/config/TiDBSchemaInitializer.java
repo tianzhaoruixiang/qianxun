@@ -6,6 +6,8 @@ import com.qianxun.domain.DataPortraitPoint;
 import com.qianxun.domain.DatasetRegistryItem;
 import com.qianxun.domain.IntentScenario;
 import com.qianxun.domain.ModelRegistryItem;
+import com.qianxun.domain.SuggestedQuestion;
+import com.qianxun.domain.ToolDisplayName;
 import com.qianxun.domain.IntentScenario.SlotDefinition;
 import com.qianxun.repo.AgentRegistryRepository;
 import com.qianxun.repo.DataFileRepository;
@@ -13,6 +15,9 @@ import com.qianxun.repo.DataPortraitRepository;
 import com.qianxun.repo.DatasetRegistryRepository;
 import com.qianxun.repo.IntentScenarioRepository;
 import com.qianxun.repo.ModelRegistryRepository;
+import com.qianxun.repo.SuggestedQuestionRepository;
+import com.qianxun.repo.ToolDisplayNameRepository;
+import com.qianxun.repo.UiConfigRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -41,6 +46,9 @@ public class TiDBSchemaInitializer implements ApplicationRunner {
     private final AgentRegistryRepository agentRegistryRepository;
     private final ModelRegistryRepository modelRegistryRepository;
     private final DatasetRegistryRepository datasetRegistryRepository;
+    private final UiConfigRepository uiConfigRepository;
+    private final SuggestedQuestionRepository suggestedQuestionRepository;
+    private final ToolDisplayNameRepository toolDisplayNameRepository;
 
     public TiDBSchemaInitializer(
             @Qualifier("tidbJdbcTemplate") JdbcTemplate jdbcTemplate,
@@ -50,7 +58,10 @@ public class TiDBSchemaInitializer implements ApplicationRunner {
             DataPortraitRepository dataPortraitRepository,
             AgentRegistryRepository agentRegistryRepository,
             ModelRegistryRepository modelRegistryRepository,
-            DatasetRegistryRepository datasetRegistryRepository
+            DatasetRegistryRepository datasetRegistryRepository,
+            UiConfigRepository uiConfigRepository,
+            SuggestedQuestionRepository suggestedQuestionRepository,
+            ToolDisplayNameRepository toolDisplayNameRepository
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.properties = properties;
@@ -60,6 +71,9 @@ public class TiDBSchemaInitializer implements ApplicationRunner {
         this.agentRegistryRepository = agentRegistryRepository;
         this.modelRegistryRepository = modelRegistryRepository;
         this.datasetRegistryRepository = datasetRegistryRepository;
+        this.uiConfigRepository = uiConfigRepository;
+        this.suggestedQuestionRepository = suggestedQuestionRepository;
+        this.toolDisplayNameRepository = toolDisplayNameRepository;
     }
 
     @Override
@@ -272,6 +286,35 @@ public class TiDBSchemaInitializer implements ApplicationRunner {
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
                 """.formatted(db));
 
+        jdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS `%s`.`ui_string_config` (
+                    `config_key`   VARCHAR(128) NOT NULL,
+                    `config_value` TEXT         NOT NULL,
+                    PRIMARY KEY (`config_key`)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
+                """.formatted(db));
+
+        jdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS `%s`.`suggested_question` (
+                    `id`          VARCHAR(64)  NOT NULL,
+                    `text`        TEXT         NOT NULL,
+                    `category`    VARCHAR(64)  NOT NULL DEFAULT '',
+                    `sort_order`  INT          NOT NULL DEFAULT 0,
+                    `enabled`     TINYINT      NOT NULL DEFAULT 1,
+                    PRIMARY KEY (`id`),
+                    KEY `idx_enabled_sort` (`enabled`,`sort_order`)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
+                """.formatted(db));
+
+        jdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS `%s`.`tool_display_name` (
+                    `tool_code`    VARCHAR(128) NOT NULL,
+                    `display_name` VARCHAR(256) NOT NULL,
+                    `sort_order`   INT            NOT NULL DEFAULT 0,
+                    PRIMARY KEY (`tool_code`)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
+                """.formatted(db));
+
         log.info("TiDB 库表就绪");
 
         tryAlterAddColumn(db, "chat_session",      "user_id",       "VARCHAR(64) NOT NULL DEFAULT \"1\"");
@@ -280,17 +323,64 @@ public class TiDBSchemaInitializer implements ApplicationRunner {
         tryAlterAddColumn(db, "chat_message",      "thinking_mode", "VARCHAR(16)");
         tryAlterAddColumn(db, "chat_message",      "think_content", "TEXT");
         tryAlterAddColumn(db, "chat_message",      "entity_cards",  "TEXT");
+        tryAlterAddColumn(db, "chat_message",      "intent_analysis", "TEXT");
         tryAlterAddColumn(db, "chat_activity_log", "thinking_mode", "VARCHAR(16)");
         tryAlterAddColumn(db, "chat_activity_log", "think_content", "TEXT");
         tryAlterAddColumn(db, "data_file",         "detail_text",   "TEXT");
         tryAlterAddColumn(db, "data_file",         "detail_json",   "LONGTEXT");
 
+        seedUiWelcomeAndToolsIfEmpty();
         seedDefaultScenariosIfEmpty();
         seedDataFilesIfEmpty();
         seedDataPortraitIfEmpty();
         seedModelRegistryIfEmpty();
         seedDatasetRegistryIfEmpty();
         seedAgentRegistryIfEmpty();
+    }
+
+    private void seedUiWelcomeAndToolsIfEmpty() {
+        if (uiConfigRepository.count() == 0) {
+            uiConfigRepository.upsert("welcome.disclaimer", "内容由 AI 大模型生成，请仔细甄别");
+            uiConfigRepository.upsert("welcome.greeting", "你好，我是千寻问答助手");
+            uiConfigRepository.upsert(
+                    "welcome.capability",
+                    "千寻能够学习你的语言，理解你的提问，进行多轮对话，帮助你高效获取信息、知识和灵感～"
+            );
+            uiConfigRepository.upsert("welcome.recommend_label", "你可以这样问我：");
+            uiConfigRepository.upsert("portrait.series_a_label", "数据A");
+            uiConfigRepository.upsert("portrait.series_b_label", "数据B");
+            log.info("ui_string_config 种子数据已写入");
+        }
+        if (suggestedQuestionRepository.count() == 0) {
+            suggestedQuestionRepository.insert(new SuggestedQuestion(
+                    newId(),
+                    "请检索过去24小时与“低空经济”相关的重点政策动态，并按地区汇总。",
+                    "intel",
+                    10,
+                    true
+            ));
+            suggestedQuestionRepository.insert(new SuggestedQuestion(
+                    newId(),
+                    "帮我梳理本周“人工智能芯片”领域的重要新闻，标注来源与发布时间。",
+                    "intel",
+                    20,
+                    true
+            ));
+            suggestedQuestionRepository.insert(new SuggestedQuestion(
+                    newId(),
+                    "请查询“跨境电商”近7天舆情热点，给出风险点和机会点。",
+                    "intel",
+                    30,
+                    true
+            ));
+            log.info("suggested_question 种子数据已写入");
+        }
+        if (toolDisplayNameRepository.count() == 0) {
+            toolDisplayNameRepository.insert(new ToolDisplayName("web_search", "网页搜索", 10));
+            toolDisplayNameRepository.insert(new ToolDisplayName("execute_code", "执行代码", 20));
+            toolDisplayNameRepository.insert(new ToolDisplayName("web_extract", "网页内容获取", 30));
+            log.info("tool_display_name 种子数据已写入");
+        }
     }
 
     private void seedDataFilesIfEmpty() {

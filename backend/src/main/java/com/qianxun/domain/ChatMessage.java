@@ -13,6 +13,8 @@ public record ChatMessage(
         String thinkContent,
         /** assistant：结构化实体 JSON 数组文本（由模型 qianxun-entities 块解析得到），可为 null */
         String entityCardsJson,
+        /** assistant：意图分析 JSON（与 SSE analysis 事件结构一致），可为 null */
+        String intentAnalysisJson,
         Instant createdAt
 ) {
     public static final String MODE_QUICK = "quick";

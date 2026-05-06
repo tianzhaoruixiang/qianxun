@@ -9,6 +9,7 @@ import org.springframework.stereotype.Repository;
 
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -85,6 +86,43 @@ public class ChatSessionRepository {
                 ROW_MAPPER, userId, limit
         );
     }
+
+    /**
+     * 会话列表附带消息条数与最后一条消息预览（用于前端历史会话）。
+     */
+    public List<ChatSessionWithStats> listByUserIdWithStatsOrderByUpdatedDesc(String userId, int limit) {
+        String db = table.substring(1, table.indexOf('`', 1));
+        String msgTbl = "`" + db + "`.`chat_message`";
+        String sql = """
+                SELECT s.`id`, s.`user_id`, s.`title`, s.`created_at`, s.`updated_at`,
+                  (SELECT COUNT(*) FROM %s m WHERE m.`session_id` = s.`id`) AS msg_count,
+                  (SELECT m2.`content` FROM %s m2 WHERE m2.`session_id` = s.`id`
+                     ORDER BY m2.`created_at` DESC, m2.`id` DESC LIMIT 1) AS last_content
+                FROM %s s
+                WHERE s.`user_id` = ?
+                ORDER BY s.`updated_at` DESC
+                LIMIT ?
+                """.formatted(msgTbl, msgTbl, table);
+        return jdbcTemplate.query(sql, (rs, rn) -> new ChatSessionWithStats(
+                rs.getString("id"),
+                rs.getString("user_id"),
+                rs.getString("title"),
+                toInstant(rs.getTimestamp("created_at")),
+                toInstant(rs.getTimestamp("updated_at")),
+                rs.getLong("msg_count"),
+                rs.getString("last_content")
+        ), userId, limit);
+    }
+
+    public record ChatSessionWithStats(
+            String id,
+            String userId,
+            String title,
+            Instant createdAt,
+            Instant updatedAt,
+            long messageCount,
+            String lastMessagePreview
+    ) {}
 
     private static Instant toInstant(Timestamp ts) {
         return ts == null ? Instant.EPOCH : ts.toInstant();

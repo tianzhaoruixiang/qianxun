@@ -18,5 +18,9 @@ public record ChatMessageResponse(
         @JsonInclude(JsonInclude.Include.NON_EMPTY)
         @JsonProperty("entityCards")
         String entityCardsJson,
+        /** assistant：意图分析 JSON，无则省略 */
+        @JsonInclude(JsonInclude.Include.NON_EMPTY)
+        @JsonProperty("intentAnalysis")
+        String intentAnalysisJson,
         Instant createdAt
 ) {}
