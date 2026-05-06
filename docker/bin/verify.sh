@@ -6,6 +6,11 @@ HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "${HERE}/.."
 
 # 从 .env 提取需要的变量（不 source，避免值里含空格的行被 shell 解析）
+api_body() {
+  local json="${1:-{}}"
+  printf '{"jsonArg":%s,"generalArgument":{"userId":"1","loginName":"admin","ip":"127.0.0.1","coralKey":""}}' "${json}"
+}
+
 read_env() {
   local key="$1" def="$2"
   local v
@@ -66,7 +71,7 @@ wait_port() {
 }
 wait_port "Doris FE"  127.0.0.1 "${DORIS_HTTP}"    "/api/health"   "qianxun-doris-fe"
 wait_port "Hermes"    127.0.0.1 "${HERMES_PORT}"   "/health"       "qianxun-hermes-agent"
-wait_port "后端"      127.0.0.1 "${BACKEND_PORT}"  "/QianXunService/sessions" "qianxun-backend"
+wait_port "后端"      127.0.0.1 "${BACKEND_PORT}"  "/QianXunService/sessions/list" "qianxun-backend"
 wait_port "前端"      127.0.0.1 "${FRONTEND_PORT}" "/"             "qianxun-frontend"
 
 echo
@@ -74,14 +79,14 @@ echo "==> 服务健康"
 check "Doris FE /api/health"  curl -fsS --max-time 8 "http://127.0.0.1:${DORIS_HTTP}/api/health"
 check "Hermes /health"        curl -fsS --max-time 8 "http://127.0.0.1:${HERMES_PORT}/health"
 check "Hermes /v1/models"     curl -fsS --max-time 8 -H "Authorization: Bearer ${TOKEN}" "http://127.0.0.1:${HERMES_PORT}/v1/models"
-check "后端 /QianXunService/sessions"    curl -fsS --max-time 8 "http://127.0.0.1:${BACKEND_PORT}/QianXunService/sessions"
+check "后端 /QianXunService/sessions/list"    curl -fsS --max-time 8 -X POST -H 'Content-Type: application/json' -d "$(api_body '{}')" "http://127.0.0.1:${BACKEND_PORT}/QianXunService/sessions/list"
 check "前端首页 200"           curl -fsS --max-time 8 -o /dev/null "http://127.0.0.1:${FRONTEND_PORT}/"
-check "前端→后端 反向代理"      curl -fsS --max-time 8 "http://127.0.0.1:${FRONTEND_PORT}/QianXunService/intent-scenarios"
+check "前端→后端 反向代理"      curl -fsS --max-time 8 -X POST -H 'Content-Type: application/json' -d "$(api_body '{"enabledOnly":true}')" "http://127.0.0.1:${FRONTEND_PORT}/QianXunService/intent-scenarios/list"
 
 echo
 echo "==> 默认意图场景（应该至少包含 org_research / person_research / general）"
-scenario_json=$(curl -sS --max-time 8 "http://127.0.0.1:${BACKEND_PORT}/QianXunService/intent-scenarios?enabledOnly=true" 2>&1)
-if echo "${scenario_json}" | python3 -c "import sys,json; d=json.load(sys.stdin); print('  共', len(d), '个场景:', [x['code'] for x in d])" 2>/dev/null; then
+scenario_json=$(curl -sS --max-time 8 -X POST -H 'Content-Type: application/json' -d "$(api_body '{"enabledOnly":true}')" "http://127.0.0.1:${BACKEND_PORT}/QianXunService/intent-scenarios/list" 2>&1)
+if echo "${scenario_json}" | python3 -c "import sys,json; r=json.load(sys.stdin); d=r.get('data', []); print('  共', len(d), '个场景:', [x['code'] for x in d])" 2>/dev/null; then
   :
 else
   echo "  ✗ 无法获取场景列表（HTTP 响应：$(echo "${scenario_json}" | head -c 120)）"
@@ -89,9 +94,9 @@ fi
 
 echo
 echo "==> 端到端 SSE 流式聊天（最多 ${SSE_TIMEOUT}s，看到 event:analysis / event:token 即视为通过）"
-SID=$(curl -sS --max-time 10 -X POST "http://127.0.0.1:${BACKEND_PORT}/QianXunService/sessions" \
-  -H 'Content-Type: application/json' -d '{}' \
-  | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('id',''))" 2>/dev/null || true)
+SID=$(curl -sS --max-time 10 -X POST "http://127.0.0.1:${BACKEND_PORT}/QianXunService/sessions/create" \
+  -H 'Content-Type: application/json' -d "$(api_body '{}')" \
+  | python3 -c "import sys,json; d=json.load(sys.stdin).get('data',{}); print(d.get('id',''))" 2>/dev/null || true)
 echo "  session=${SID}"
 if [ -z "${SID}" ]; then
   echo "  ✗ 无法创建会话（请检查后端日志）"

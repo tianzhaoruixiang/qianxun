@@ -2,11 +2,10 @@
 FROM node:20-alpine AS build
 WORKDIR /workspace
 
-COPY frontend/package.json frontend/package-lock.json* ./
+COPY fronted/package.json fronted/package-lock.json* ./
 RUN npm install --no-audit --no-fund
 
-COPY frontend/index.html frontend/vite.config.ts frontend/tsconfig.json frontend/tsconfig.node.json ./
-COPY frontend/src ./src
+COPY fronted/ ./
 RUN npm run build
 
 # ───────── Runtime：nginx alpine（SSE 友好） ─────────

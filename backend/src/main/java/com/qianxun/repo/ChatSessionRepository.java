@@ -2,6 +2,7 @@ package com.qianxun.repo;
 
 import com.qianxun.config.QianxunProperties;
 import com.qianxun.domain.ChatSession;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
@@ -25,7 +26,7 @@ public class ChatSessionRepository {
     private final JdbcTemplate jdbcTemplate;
     private final String table;
 
-    public ChatSessionRepository(JdbcTemplate jdbcTemplate, QianxunProperties properties) {
+    public ChatSessionRepository(@Qualifier("tidbJdbcTemplate") JdbcTemplate jdbcTemplate, QianxunProperties properties) {
         this.jdbcTemplate = jdbcTemplate;
         this.table = "`" + properties.getDb() + "`.`chat_session`";
     }

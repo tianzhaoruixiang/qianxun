@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.qianxun.config.QianxunProperties;
 import com.qianxun.domain.IntentScenario;
 import com.qianxun.domain.IntentScenario.SlotDefinition;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
@@ -23,7 +24,7 @@ public class IntentScenarioRepository {
     private final String table;
     private final RowMapper<IntentScenario> rowMapper;
 
-    public IntentScenarioRepository(JdbcTemplate jdbc, ObjectMapper mapper, QianxunProperties properties) {
+    public IntentScenarioRepository(@Qualifier("tidbJdbcTemplate") JdbcTemplate jdbc, ObjectMapper mapper, QianxunProperties properties) {
         this.jdbc = jdbc;
         this.mapper = mapper;
         this.table = "`" + properties.getDb() + "`.`intent_scenario`";

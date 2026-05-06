@@ -148,9 +148,9 @@ public class QianXunServiceChatSession {
 
     private void maybeRenameSessionFromFirstQuestion(String sessionId, String userContent) {
         ChatSession session = sessionRepository.findById(sessionId).orElse(null);
-        if (session == null || !"新会话".equals(session.title())) return;
+        if (session == null || !"新会话".equals(session.title())) { return; }
         String snippet = userContent.replace("\r", " ").replace("\n", " ").trim();
-        if (snippet.length() > 48) snippet = snippet.substring(0, 48) + "…";
+        if (snippet.length() > 48) { snippet = snippet.substring(0, 48) + "…"; }
         if (!snippet.isBlank()) {
             sessionRepository.updateTitle(sessionId, session.userId(), snippet, Instant.now());
         }

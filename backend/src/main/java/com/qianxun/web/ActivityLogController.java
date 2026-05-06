@@ -4,8 +4,11 @@ import com.qianxun.context.UserContext;
 import com.qianxun.service.QianXunServiceActivityLog;
 import com.qianxun.service.QianXunServiceChatSession;
 import com.qianxun.web.dto.ActivityLogResponse;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
+import com.qianxun.web.dto.ActivityLogListRequest;
+import com.qianxun.web.dto.ApiRequest;
+import com.qianxun.web.dto.ApiResponse;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -13,10 +16,10 @@ import java.util.List;
 
 /**
  * 活动日志查询接口（供开发/运营自检优化使用）
- * GET /QianXunService/sessions/{sessionId}/activity-logs
+ * POST /QianXunService/activity-logs/list
  */
 @RestController
-@RequestMapping("/QianXunService/sessions/{sessionId}/activity-logs")
+@RequestMapping("/QianXunService/activity-logs")
 public class ActivityLogController {
 
     private final QianXunServiceActivityLog activityLogService;
@@ -27,10 +30,12 @@ public class ActivityLogController {
         this.chatSessionService = chatSessionService;
     }
 
-    @GetMapping
-    public List<ActivityLogResponse> list(@PathVariable("sessionId") String sessionId) {
+    @PostMapping("/list")
+    public ApiResponse<List<ActivityLogResponse>> list(@RequestBody ApiRequest<ActivityLogListRequest> request) {
+        ApiRequestSupport.applyGeneralArgument(request);
+        String sessionId = ApiRequestSupport.jsonArg(request).sessionId();
         String userId = UserContext.getCurrentUserId();
         chatSessionService.ensureSessionOwnership(sessionId, userId);
-        return activityLogService.listBySession(sessionId);
+        return ApiResponse.success(activityLogService.listBySession(sessionId));
     }
 }

@@ -1,15 +1,14 @@
 package com.qianxun.web;
 
 import com.qianxun.service.QianXunServiceChatSession;
+import com.qianxun.web.dto.ApiRequest;
+import com.qianxun.web.dto.ApiResponse;
 import com.qianxun.web.dto.ChatMessageResponse;
 import com.qianxun.web.dto.ChatSessionResponse;
 import com.qianxun.web.dto.CreateSessionRequest;
-import com.qianxun.web.dto.UpdateSessionRequest;
-import jakarta.validation.Valid;
-import org.springframework.web.bind.annotation.DeleteMapping;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PatchMapping;
-import org.springframework.web.bind.annotation.PathVariable;
+import com.qianxun.web.dto.IdRequest;
+import com.qianxun.web.dto.SessionMessageListRequest;
+import com.qianxun.web.dto.UpdateSessionApiRequest;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -27,33 +26,41 @@ public class SessionController {
         this.chatSessionService = chatSessionService;
     }
 
-    @PostMapping
-    public ChatSessionResponse create(@RequestBody(required = false) CreateSessionRequest request) {
-        return chatSessionService.create(request);
+    @PostMapping("/create")
+    public ApiResponse<ChatSessionResponse> create(@RequestBody(required = false) ApiRequest<CreateSessionRequest> request) {
+        ApiRequestSupport.applyGeneralArgument(request);
+        return ApiResponse.success(chatSessionService.create(ApiRequestSupport.jsonArg(request)));
     }
 
-    @GetMapping
-    public List<ChatSessionResponse> list() {
-        return chatSessionService.list();
+    @PostMapping("/list")
+    public ApiResponse<List<ChatSessionResponse>> list(@RequestBody(required = false) ApiRequest<Object> request) {
+        ApiRequestSupport.applyGeneralArgument(request);
+        return ApiResponse.success(chatSessionService.list());
     }
 
-    @GetMapping("/{id}")
-    public ChatSessionResponse get(@PathVariable("id") String id) {
-        return chatSessionService.get(id);
+    @PostMapping("/get")
+    public ApiResponse<ChatSessionResponse> get(@RequestBody ApiRequest<IdRequest> request) {
+        ApiRequestSupport.applyGeneralArgument(request);
+        return ApiResponse.success(chatSessionService.get(ApiRequestSupport.jsonArg(request).id()));
     }
 
-    @PatchMapping("/{id}")
-    public ChatSessionResponse update(@PathVariable("id") String id, @RequestBody UpdateSessionRequest request) {
-        return chatSessionService.update(id, request);
+    @PostMapping("/update")
+    public ApiResponse<ChatSessionResponse> update(@RequestBody ApiRequest<UpdateSessionApiRequest> request) {
+        ApiRequestSupport.applyGeneralArgument(request);
+        UpdateSessionApiRequest arg = ApiRequestSupport.jsonArg(request);
+        return ApiResponse.success(chatSessionService.update(arg.id(), new com.qianxun.web.dto.UpdateSessionRequest(arg.title())));
     }
 
-    @DeleteMapping("/{id}")
-    public void delete(@PathVariable("id") String id) {
-        chatSessionService.delete(id);
+    @PostMapping("/delete")
+    public ApiResponse<Void> delete(@RequestBody ApiRequest<IdRequest> request) {
+        ApiRequestSupport.applyGeneralArgument(request);
+        chatSessionService.delete(ApiRequestSupport.jsonArg(request).id());
+        return ApiResponse.success(null);
     }
 
-    @GetMapping("/{id}/messages")
-    public List<ChatMessageResponse> messages(@PathVariable("id") String id) {
-        return chatSessionService.listMessages(id);
+    @PostMapping("/messages")
+    public ApiResponse<List<ChatMessageResponse>> messages(@RequestBody ApiRequest<SessionMessageListRequest> request) {
+        ApiRequestSupport.applyGeneralArgument(request);
+        return ApiResponse.success(chatSessionService.listMessages(ApiRequestSupport.jsonArg(request).sessionId()));
     }
 }

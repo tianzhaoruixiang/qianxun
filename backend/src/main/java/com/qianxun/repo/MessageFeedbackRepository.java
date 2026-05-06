@@ -2,6 +2,7 @@ package com.qianxun.repo;
 
 import com.qianxun.config.QianxunProperties;
 import com.qianxun.domain.MessageFeedback;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
@@ -28,7 +29,7 @@ public class MessageFeedbackRepository {
     private final JdbcTemplate jdbc;
     private final String table;
 
-    public MessageFeedbackRepository(JdbcTemplate jdbc, QianxunProperties properties) {
+    public MessageFeedbackRepository(@Qualifier("tidbJdbcTemplate") JdbcTemplate jdbc, QianxunProperties properties) {
         this.jdbc = jdbc;
         this.table = "`" + properties.getDb() + "`.`message_feedback`";
     }

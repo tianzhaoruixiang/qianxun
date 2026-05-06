@@ -20,7 +20,7 @@ public final class PromptTemplateRenderer {
             return "";
         }
         Matcher m = PATTERN.matcher(template);
-        StringBuilder out = new StringBuilder(template.length() + 16);
+        final StringBuilder out = new StringBuilder(template.length() + 16);
         while (m.find()) {
             String name = m.group(1);
             String def = m.group(2) == null ? "" : m.group(2).trim();

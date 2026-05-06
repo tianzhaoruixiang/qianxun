@@ -145,43 +145,50 @@ public class QianXunServiceIntentScenario {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请求体不能为空");
         }
         if (creating) {
-            if (req.code() == null || req.code().isBlank()) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "code 必填");
-            }
-            if (req.name() == null || req.name().isBlank()) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "name 必填");
-            }
+            requireNonBlank(req.code(), "code 必填", true);
+            requireNonBlank(req.name(), "name 必填", true);
         } else {
-            if (req.code() != null && req.code().isBlank()) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "code 不能为空字符串");
-            }
-            if (req.name() != null && req.name().isBlank()) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "name 不能为空字符串");
-            }
+            requireNonBlank(req.code(), "code 不能为空字符串", false);
+            requireNonBlank(req.name(), "name 不能为空字符串", false);
         }
         if (req.code() != null && !req.code().matches("[a-zA-Z][a-zA-Z0-9_\\-]{0,127}")) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "code 必须以字母开头，仅含字母数字下划线和短横，长度 1~128");
         }
         if (req.slots() != null) {
-            Set<String> seen = new LinkedHashSet<>();
-            for (SlotDefinition slot : req.slots()) {
-                if (slot == null || slot.name() == null || slot.name().isBlank()) {
-                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "槽位名不能为空");
-                }
-                if (!seen.add(slot.name().trim())) {
-                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "槽位名重复: " + slot.name());
-                }
-                String type = slot.type() == null ? "string" : slot.type().trim().toLowerCase();
-                if (!ALLOWED_SLOT_TYPES.contains(type)) {
-                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                            "槽位类型非法: " + slot.type() + "，可选 " + ALLOWED_SLOT_TYPES);
-                }
-                if ("enum".equals(type) && (slot.values() == null || slot.values().isEmpty())) {
-                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                            "枚举槽位必须提供 values: " + slot.name());
-                }
-            }
+            validateSlots(req.slots());
+        }
+    }
+
+    private void requireNonBlank(String value, String message, boolean required) {
+        if (required && (value == null || value.isBlank())
+                || !required && value != null && value.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, message);
+        }
+    }
+
+    private void validateSlots(List<SlotDefinition> slots) {
+        Set<String> seen = new LinkedHashSet<>();
+        for (SlotDefinition slot : slots) {
+            validateSlot(slot, seen);
+        }
+    }
+
+    private void validateSlot(SlotDefinition slot, Set<String> seen) {
+        if (slot == null || slot.name() == null || slot.name().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "槽位名不能为空");
+        }
+        if (!seen.add(slot.name().trim())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "槽位名重复: " + slot.name());
+        }
+        String type = slot.type() == null ? "string" : slot.type().trim().toLowerCase();
+        if (!ALLOWED_SLOT_TYPES.contains(type)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "槽位类型非法: " + slot.type() + "，可选 " + ALLOWED_SLOT_TYPES);
+        }
+        if ("enum".equals(type) && (slot.values() == null || slot.values().isEmpty())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "枚举槽位必须提供 values: " + slot.name());
         }
     }
 

@@ -3,27 +3,20 @@ package com.qianxun.web;
 import com.qianxun.context.UserContext;
 import com.qianxun.service.QianXunServiceActivityLog;
 import com.qianxun.service.QianXunServiceChatSession;
-import com.qianxun.web.dto.FeedbackRequest;
+import com.qianxun.web.dto.ApiRequest;
+import com.qianxun.web.dto.ApiResponse;
+import com.qianxun.web.dto.FeedbackApiRequest;
 import com.qianxun.web.dto.FeedbackResponse;
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.DeleteMapping;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.Map;
-
 /**
  * 消息反馈接口（点赞 / 点踩）
- * POST   /QianXunService/sessions/{sessionId}/messages/{messageId}/feedback
- * GET    /QianXunService/sessions/{sessionId}/messages/{messageId}/feedback
- * DELETE /QianXunService/sessions/{sessionId}/messages/{messageId}/feedback
  */
 @RestController
-@RequestMapping("/QianXunService/sessions/{sessionId}/messages/{messageId}/feedback")
+@RequestMapping("/QianXunService/feedback")
 public class FeedbackController {
 
     private final QianXunServiceActivityLog activityLogService;
@@ -34,40 +27,34 @@ public class FeedbackController {
         this.chatSessionService = chatSessionService;
     }
 
-    @PostMapping
-    public FeedbackResponse submit(
-            @PathVariable("sessionId") String sessionId,
-            @PathVariable("messageId") String messageId,
-            @RequestBody FeedbackRequest request
-    ) {
+    @PostMapping("/submit")
+    public ApiResponse<FeedbackResponse> submit(@RequestBody ApiRequest<FeedbackApiRequest> request) {
+        ApiRequestSupport.applyGeneralArgument(request);
+        FeedbackApiRequest arg = ApiRequestSupport.jsonArg(request);
         String userId = UserContext.getCurrentUserId();
-        chatSessionService.ensureSessionOwnership(sessionId, userId);
-        return activityLogService.submitFeedback(
-                userId, sessionId, messageId,
-                request.feedbackType(), request.feedbackNote()
-        );
+        chatSessionService.ensureSessionOwnership(arg.sessionId(), userId);
+        return ApiResponse.success(activityLogService.submitFeedback(
+                userId, arg.sessionId(), arg.messageId(),
+                arg.feedbackType(), arg.feedbackNote()
+        ));
     }
 
-    @GetMapping
-    public ResponseEntity<FeedbackResponse> get(
-            @PathVariable("sessionId") String sessionId,
-            @PathVariable("messageId") String messageId
-    ) {
+    @PostMapping("/get")
+    public ApiResponse<FeedbackResponse> get(@RequestBody ApiRequest<FeedbackApiRequest> request) {
+        ApiRequestSupport.applyGeneralArgument(request);
+        FeedbackApiRequest arg = ApiRequestSupport.jsonArg(request);
         String userId = UserContext.getCurrentUserId();
-        chatSessionService.ensureSessionOwnership(sessionId, userId);
-        return activityLogService.getFeedback(messageId)
-                .map(ResponseEntity::ok)
-                .orElse(ResponseEntity.noContent().build());
+        chatSessionService.ensureSessionOwnership(arg.sessionId(), userId);
+        return ApiResponse.success(activityLogService.getFeedback(arg.messageId()).orElse(null));
     }
 
-    @DeleteMapping
-    public ResponseEntity<Map<String, String>> delete(
-            @PathVariable("sessionId") String sessionId,
-            @PathVariable("messageId") String messageId
-    ) {
+    @PostMapping("/delete")
+    public ApiResponse<Void> delete(@RequestBody ApiRequest<FeedbackApiRequest> request) {
+        ApiRequestSupport.applyGeneralArgument(request);
+        FeedbackApiRequest arg = ApiRequestSupport.jsonArg(request);
         String userId = UserContext.getCurrentUserId();
-        chatSessionService.ensureSessionOwnership(sessionId, userId);
-        activityLogService.deleteFeedback(messageId);
-        return ResponseEntity.ok(Map.of("message", "feedback removed"));
+        chatSessionService.ensureSessionOwnership(arg.sessionId(), userId);
+        activityLogService.deleteFeedback(arg.messageId());
+        return ApiResponse.success(null);
     }
 }

@@ -5,10 +5,10 @@ spring:
   application:
     name: qianxun-server
   datasource:
-    # 先连到 FE MySQL 协议端口，不指定库名，启动时由 SchemaInitializer 创建 qianxun 库与表
-    url: jdbc:mysql://${DORIS_HOST:127.0.0.1}:${DORIS_PORT:9030}?useSSL=false&characterEncoding=utf-8&connectTimeout=15000&socketTimeout=600000
-    username: ${DORIS_USER:root}
-    password: ${DORIS_PASSWORD:}
+    # 保留 spring.datasource 仅作默认连接参数；实际业务走 tidbDataSource
+    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://tidb:4000?useSSL=false&characterEncoding=utf-8&connectTimeout=15000&socketTimeout=600000}
+    username: ${SPRING_DATASOURCE_USERNAME:root}
+    password: ${SPRING_DATASOURCE_PASSWORD:}
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
       maximum-pool-size: 16
@@ -16,7 +16,7 @@ spring:
 qianxun:
   db: qianxun
   llm:
-    base-url: ${QIANXUN_LLM_BASE_URL:https://api.openai.com/v1}
+    base-url: ${QIANXUN_LLM_BASE_URL:http://app-container-gateway:8642/v1}
     api-key: ${OPENAI_API_KEY:}
     model: ${QIANXUN_LLM_MODEL:gpt-4o-mini}
     # 未配置 API Key 时走本地模拟流式输出，便于开箱体验
@@ -33,10 +33,10 @@ qianxun:
 
   # Hermes Agent：OpenAI 兼容 /v1/chat/completions（默认指向 docker-compose 启动的 hermes-agent）
   hermes:
-    enabled: ${QIANXUN_HERMES_ENABLED:false}
-    base-url: ${QIANXUN_HERMES_BASE_URL:http://127.0.0.1:8642/v1}
+    enabled: ${QIANXUN_HERMES_ENABLED:true}
+    base-url: ${QIANXUN_HERMES_BASE_URL:http://app-container-master:8642/v1}
     # 与 hermes/data/.env 中 API_SERVER_KEY 保持一致；本地默认值仅用于开发联调
-    api-key: ${HERMES_API_KEY:qianxun-local-dev-key}
+    api-key: ${HERMES_API_KEY:12345678}
     # Hermes API server 通告的 model 名（默认 profile 即 hermes-agent）；
     # 真正调用的下游模型/Provider 由 hermes/config.yaml 决定（当前为 kimi-coding-cn / kimi-k2.5）
     chat-model: ${QIANXUN_HERMES_CHAT_MODEL:hermes-agent}
@@ -50,6 +50,42 @@ qianxun:
       model: ${QIANXUN_HERMES_NLU_MODEL:}
       temperature: ${QIANXUN_HERMES_NLU_TEMPERATURE:0.0}
       system-prompt: ${QIANXUN_HERMES_NLU_SYSTEM_PROMPT:}
+
+management:
+  health:
+    elasticsearch:
+      enabled: false
+    db:
+      enabled: false
+  endpoints:
+    web:
+      base-path: /
+  endpoint:
+    health:
+      enabled: true
+      show-details: always
+
+tidb:
+  datasource:
+    DbUrl: ${TIDB_DB_URL:jdbc:mysql://tidb:4000/qianxun?createDatabaseIfNotExist=true&useUnicode=true&characterEncoding=UTF-8&useSSL=false&rewriteBatchedStatements=true&allowMultiQueries=true}
+    username: ${TIDB_USER:root}
+    password: ${TIDB_PASSWORD:}
+doris:
+  datasource:
+    enable: ${DORIS_ENABLE:false}
+    url: ${DORIS_DB_URL:jdbc:mysql://doris-cluster:9030/test?createDatabaseIfNotExist=true&useUnicode=true&characterEncoding=utf8&serverTimezone=Hongkong&cachePrepStmt=true&userServerPrepStmt=true&rewriteBatchedStatements=true}
+    username: ${DORIS_USER:root}
+    password: ${DORIS_PASSWORD:}
+
+custom:
+  datasource:
+    maxActive: 150
+    initialSize: 20
+    maxWait: 6000
+    minIdle: 10
+    validationQuery: SELECT 1
+    driverClassName: com.mysql.cj.jdbc.Driver
+    connectionProperties: druid.stat.mergeSql=true;druid.stat.slowSqlMillis=1000
 
 logging:
   level:

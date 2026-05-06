@@ -11,6 +11,9 @@ import com.qianxun.llm.OpenAiCompatibleStreamClient;
 import com.qianxun.nlu.IntentSlotUnderstanding;
 import com.qianxun.nlu.QianXunServiceIntentSlotUnderstanding;
 import com.qianxun.nlu.PromptTemplateRenderer;
+import com.qianxun.repo.DatasetRegistryRepository;
+import com.qianxun.repo.DataFileRepository;
+import com.qianxun.repo.ModelRegistryRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -74,6 +77,9 @@ public class QianXunServiceChatStream {
     private final QianXunServiceIntentSlotUnderstanding intentSlotUnderstandingService;
     private final QianXunServiceIntentScenario intentScenarioService;
     private final QianXunServiceActivityLog activityLogService;
+    private final ModelRegistryRepository modelRegistryRepository;
+    private final DatasetRegistryRepository datasetRegistryRepository;
+    private final DataFileRepository dataFileRepository;
     private final ObjectMapper objectMapper;
     private final QianxunProperties properties;
 
@@ -83,6 +89,9 @@ public class QianXunServiceChatStream {
             QianXunServiceIntentSlotUnderstanding intentSlotUnderstandingService,
             QianXunServiceIntentScenario intentScenarioService,
             QianXunServiceActivityLog activityLogService,
+            ModelRegistryRepository modelRegistryRepository,
+            DatasetRegistryRepository datasetRegistryRepository,
+            DataFileRepository dataFileRepository,
             ObjectMapper objectMapper,
             QianxunProperties properties
     ) {
@@ -91,6 +100,9 @@ public class QianXunServiceChatStream {
         this.intentSlotUnderstandingService = intentSlotUnderstandingService;
         this.intentScenarioService = intentScenarioService;
         this.activityLogService = activityLogService;
+        this.modelRegistryRepository = modelRegistryRepository;
+        this.datasetRegistryRepository = datasetRegistryRepository;
+        this.dataFileRepository = dataFileRepository;
         this.objectMapper = objectMapper;
         this.properties = properties;
     }
@@ -102,6 +114,9 @@ public class QianXunServiceChatStream {
             String userId, String sessionId,
             String userContent, boolean deepMode,
             String confirmedScenarioCode,
+            String modelCode,
+            String datasetCode,
+            List<String> selectedFileIds,
             SseEmitter emitter
     ) {
         long totalStart = System.currentTimeMillis();
@@ -114,192 +129,41 @@ public class QianXunServiceChatStream {
                 .thinkingMode(deepMode ? ChatMessage.MODE_DEEP : ChatMessage.MODE_QUICK)
                 .createdAt(Instant.now());
 
+        StreamContext ctx = new StreamContext(emitter, logBuilder, deepMode);
+
         try {
             ChatMessage userMsg = sessionService.appendUserMessage(sessionId, userContent);
             logBuilder.userMessageId(userMsg.id());
 
-            boolean useMock = shouldUseMock();
-            if (!useMock) {
-                ChatEndpoint preview = resolveChatEndpoint(null);
-                if (preview.baseUrl().isBlank()) {
-                    throw new IllegalStateException("未配置 LLM/Hermes 的 base-url");
-                }
-                if (!properties.getHermes().isEnabled() && preview.apiKey().trim().isEmpty()) {
-                    throw new IllegalStateException("缺少 OPENAI_API_KEY（或 qianxun.llm.api-key）");
-                }
-            }
+            boolean useMock = validateConfig();
 
             List<ChatMessage> history = sessionService.loadHistoryForLlm(sessionId);
             List<Map<String, String>> llmMessages = toOpenAiMessages(history);
             boolean hasPriorTurns = history.size() > 1;
 
             // ── NLU 阶段 ───────────────────────────────────────────────────────
-            long nluStart = System.currentTimeMillis();
-            IntentSlotUnderstanding understanding;
-            if (confirmedScenarioCode != null && !confirmedScenarioCode.isBlank()) {
-                // 用户已从澄清卡片中确认意图 → 跳过 NLU，直接构建 understanding
-                understanding = buildFromConfirmedScenario(confirmedScenarioCode, intentScenarioService.listEnabled());
-                log.info("意图已由用户确认: code={}", confirmedScenarioCode);
-            } else {
-                understanding = maybeUnderstand(userContent, history, useMock);
-            }
-            long nluDuration = System.currentTimeMillis() - nluStart;
-            logBuilder.nluDurationMs(nluDuration);
-
-            IntentScenario scenario = understanding == null ? null : understanding.scenario();
+            IntentSlotUnderstanding understanding = runNluPhase(userContent, history, confirmedScenarioCode, useMock);
             if (understanding != null) {
-                fillNluFields(logBuilder, understanding);
-                sendAnalysis(emitter, understanding);
-                if (understanding.agentSkill() != null && !understanding.agentSkill().isBlank()) {
-                    sendEvent(emitter, "agent_step", Map.of(
-                            "type", "agent_skill",
-                            "label", understanding.agentSkill(),
-                            "detail", understanding.scenarioName() == null ? "" : understanding.scenarioName()
-                    ));
-                }
-
-                // ── 置信度低 → 触发意图澄清，提前结束 ────────────────────────
-                boolean isLowConfidence = understanding.confidence() < CLARIFICATION_THRESHOLD;
-                boolean isGeneral       = IntentScenario.GENERAL_CODE.equals(understanding.scenarioCode());
-                boolean wasConfirmed    = confirmedScenarioCode != null && !confirmedScenarioCode.isBlank();
-                if (isLowConfidence && !wasConfirmed) {
-                    sendClarification(emitter, understanding, userContent, intentScenarioService.listEnabled());
-                    // 保存一条简短的"意图澄清"助手消息，供对话历史记录
-                    String clarificationMsg = "🤔 您的问题意图尚不明确（置信度 "
-                            + Math.round(understanding.confidence() * 100) + "%），请选择您想调研的方向。";
-                    var saved = sessionService.appendAssistantMessage(
-                            sessionId, clarificationMsg,
-                            deepMode ? ChatMessage.MODE_DEEP : ChatMessage.MODE_QUICK,
-                            null,
-                            null
-                    );
-                    logBuilder.assistantMessageId(saved.id())
-                              .status(ChatActivityLog.STATUS_MOCK)
-                              .totalDurationMs(System.currentTimeMillis() - totalStart);
-                    activityLogService.saveLog(logBuilder.build());
-                    sendEvent(emitter, "done", Map.of(
-                            "assistantMessageId", saved.id(),
-                            "sessionId", sessionId,
-                            "clarification", true
-                    ));
-                    emitter.complete();
-                    return;
-                }
-
-                llmMessages = augmentWithScenarioAndNlu(llmMessages, understanding, hasPriorTurns);
+                handleNluResult(ctx, understanding, userContent, llmMessages, hasPriorTurns, confirmedScenarioCode);
             }
 
             llmMessages = injectEntityExportInstruction(llmMessages);
-
-            // ── 深度思考模式：注入 CoT 系统提示词 ──────────────────────────────
             if (deepMode) {
                 llmMessages = injectDeepThinkPrompt(llmMessages);
                 sendEvent(emitter, "think_start", Map.of());
             }
+            llmMessages = injectDatasetContext(llmMessages, datasetCode);
+            llmMessages = injectSelectedFilesContext(llmMessages, selectedFileIds);
 
             // ── LLM 阶段 ───────────────────────────────────────────────────────
-            ChatEndpoint endpoint = resolveChatEndpoint(scenario);
-            logBuilder.llmEndpoint(endpoint.baseUrl()).llmModel(endpoint.model());
+            callLlmStream(ctx, llmMessages, useMock, userContent, modelCode);
 
-            StringBuilder responseText  = new StringBuilder(); // 正式回复
-            StringBuilder thinkText     = new StringBuilder(); // 推理内容
-
-            ThinkBlockStreamParser thinkParser = deepMode ? new ThinkBlockStreamParser() : null;
-
-            long llmStart = System.currentTimeMillis();
-            if (useMock) {
-                logBuilder.status(ChatActivityLog.STATUS_MOCK);
-                logBuilder.llmRequestJson(buildMockRequestNote(userContent));
-                openAiClient.streamMockReply(userContent, token -> {
-                    handleToken(emitter, token, deepMode, thinkParser, responseText, thinkText);
-                });
-            } else {
-                String requestJson = buildLlmRequestJson(endpoint.model(), llmMessages);
-                logBuilder.llmRequestJson(requestJson);
-                OpenAiCompatibleStreamClient.StreamCompletionMeta streamMeta = openAiClient.streamChatCompletions(
-                        endpoint.baseUrl(), endpoint.apiKey(), endpoint.model(), llmMessages,
-                        token -> handleToken(emitter, token, deepMode, thinkParser, responseText, thinkText),
-                        toolCall -> sendToolCallEvent(emitter, toolCall)
-                );
-                if (!streamMeta.sawDone() || "length".equals(streamMeta.finishReason())) {
-                    String msg = "length".equals(streamMeta.finishReason())
-                            ? "回答可能因输出长度上限被截断，可调大环境变量 QIANXUN_LLM_MAX_TOKENS 或 qianxun.llm.max-tokens。"
-                            : "上游流式连接在未正常结束时断开，若正文不完整请重试。";
-                    sendEvent(emitter, "stream_warning", Map.of(
-                            "finishReason", streamMeta.finishReason() == null ? "" : streamMeta.finishReason(),
-                            "sawDone", streamMeta.sawDone(),
-                            "message", msg
-                    ));
-                }
-            }
-
-            // 冲洗解析器缓冲
-            if (thinkParser != null) {
-                for (ThinkBlockStreamParser.Chunk chunk : thinkParser.flush()) {
-                    routeChunk(emitter, chunk, responseText, thinkText);
-                }
-            }
-
-            long llmDuration = System.currentTimeMillis() - llmStart;
-            logBuilder.llmDurationMs(llmDuration);
-
-            EntityBlockParser.Result entityParse = EntityBlockParser.parse(responseText.toString(), objectMapper);
-            String answerClean = entityParse.cleanContent();
-            logBuilder.llmResponseText(answerClean);
-
-            String thinkContent = thinkText.isEmpty() ? null : thinkText.toString();
-            logBuilder.thinkContent(thinkContent);
-
-            if (deepMode) {
-                sendEvent(emitter, "think_end", Map.of("thinkContent", thinkContent == null ? "" : thinkContent));
-            }
-
-            JsonNode entityArr = entityParse.entitiesArray();
-            String entityCardsJson = null;
-            try {
-                if (entityArr != null && entityArr.isArray() && !entityArr.isEmpty()) {
-                    entityCardsJson = objectMapper.writeValueAsString(entityArr);
-                }
-            } catch (Exception ex) {
-                log.debug("实体 JSON 序列化失败（忽略）: {}", ex.toString());
-            }
-            try {
-                String itemsJson = entityArr == null || entityArr.isNull() || !entityArr.isArray()
-                        ? "[]" : objectMapper.writeValueAsString(entityArr);
-                sendEvent(emitter, "entities", Map.of("itemsJson", itemsJson));
-            } catch (Exception ex) {
-                log.debug("entities SSE 序列化失败（忽略）: {}", ex.toString());
-            }
-
-            // ── 保存消息 & 活动日志 ──────────────────────────────────────────────
-            var saved = sessionService.appendAssistantMessage(
-                    sessionId, answerClean,
-                    deepMode ? ChatMessage.MODE_DEEP : ChatMessage.MODE_QUICK,
-                    thinkContent,
-                    entityCardsJson
-            );
-            logBuilder.assistantMessageId(saved.id())
-                      .totalDurationMs(System.currentTimeMillis() - totalStart);
-            activityLogService.saveLog(logBuilder.build());
-
-            sendEvent(emitter, "done", Map.of(
-                    "assistantMessageId", saved.id(),
-                    "sessionId", sessionId
-            ));
-            emitter.complete();
+            // ── 后处理 ──────────────────────────────────────────────────────────
+            parseAndSendEntities(ctx);
+            saveAndComplete(ctx);
 
         } catch (Exception ex) {
-            log.warn("流式问答失败: {}", ex.toString());
-            activityLogService.saveLog(
-                    logBuilder.status(ChatActivityLog.STATUS_ERROR)
-                              .errorMessage(ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage())
-                              .totalDurationMs(System.currentTimeMillis() - totalStart)
-                              .build()
-            );
-            try {
-                sendEvent(emitter, "error", Map.of("message", ex.getMessage() == null ? "unknown" : ex.getMessage()));
-            } catch (Exception ignored) {}
-            emitter.completeWithError(ex);
+            handleStreamError(ctx, totalStart, ex);
         }
     }
 
@@ -337,7 +201,7 @@ public class QianXunServiceChatStream {
         try {
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("text", text);
-            if (isThink) data.put("think", true);
+            if (isThink) { data.put("think", true); }
             emitter.send(SseEmitter.event().name(isThink ? "think_token" : "token").data(data));
         } catch (IOException e) {
             throw new UncheckedIOException(e);
@@ -387,6 +251,69 @@ public class QianXunServiceChatStream {
         s.put("role", "system");
         s.put("content", ENTITY_EXPORT_SYSTEM_PROMPT);
         out.add(s);
+        out.addAll(messages);
+        return out;
+    }
+
+    private List<Map<String, String>> injectDatasetContext(List<Map<String, String>> messages, String datasetCode) {
+        if (datasetCode == null || datasetCode.isBlank()) {
+            return messages;
+        }
+        var datasetOpt = datasetRegistryRepository.findByCode(datasetCode.trim());
+        if (datasetOpt.isEmpty() || !datasetOpt.get().enabled()) {
+            return messages;
+        }
+        var d = datasetOpt.get();
+        String datasetPrompt = """
+                当前会话已选择数据集，请优先参考其语义范围回答：
+                - 数据集编码：%s
+                - 数据集名称：%s
+                - 描述：%s
+                - 来源类型：%s
+                - 来源引用：%s
+                - 文档数量：%d
+                若问题超出该数据集范围，请明确提示并给出可扩展建议。
+                """.formatted(
+                nullSafe(d.code()), nullSafe(d.name()), nullSafe(d.description()),
+                nullSafe(d.sourceType()), nullSafe(d.sourceRef()), d.docCount()
+        );
+        List<Map<String, String>> out = new ArrayList<>(messages.size() + 1);
+        LinkedHashMap<String, String> sys = new LinkedHashMap<>();
+        sys.put("role", "system");
+        sys.put("content", datasetPrompt);
+        out.add(sys);
+        out.addAll(messages);
+        return out;
+    }
+
+    private List<Map<String, String>> injectSelectedFilesContext(List<Map<String, String>> messages, List<String> selectedFileIds) {
+        if (selectedFileIds == null || selectedFileIds.isEmpty()) {
+            return messages;
+        }
+        List<String> ids = selectedFileIds.stream().filter(v -> v != null && !v.isBlank()).limit(10).toList();
+        if (ids.isEmpty()) {
+            return messages;
+        }
+        var files = dataFileRepository.findByIds(ids);
+        if (files.isEmpty()) {
+            return messages;
+        }
+        StringBuilder sb = new StringBuilder("当前会话已选择以下中间数据文件，请优先围绕这些文件回答：\n");
+        for (int i = 0; i < files.size(); i++) {
+            var f = files.get(i);
+            sb.append(i + 1).append(". [").append(nullSafe(f.kind())).append("] ")
+                    .append(nullSafe(f.name())).append(" (").append(nullSafe(f.displayDate())).append(")\n");
+            if (f.detailText() != null && !f.detailText().isBlank()) {
+                String preview = f.detailText().replaceAll("\\s+", " ").trim();
+                if (preview.length() > 120) preview = preview.substring(0, 120) + "...";
+                sb.append("   摘要：").append(preview).append("\n");
+            }
+        }
+        List<Map<String, String>> out = new ArrayList<>(messages.size() + 1);
+        LinkedHashMap<String, String> sys = new LinkedHashMap<>();
+        sys.put("role", "system");
+        sys.put("content", sb.toString());
+        out.add(sys);
         out.addAll(messages);
         return out;
     }
@@ -496,7 +423,7 @@ public class QianXunServiceChatStream {
         int maxMsgs = 12;
         int start = Math.max(0, prior.size() - maxMsgs);
         int perMsgCap = 3200;
-        StringBuilder sb = new StringBuilder();
+        final StringBuilder sb = new StringBuilder();
         sb.append("【本会话当前输入之前的对话摘录】\n");
         for (int i = start; i < prior.size(); i++) {
             ChatMessage m = prior.get(i);
@@ -529,7 +456,7 @@ public class QianXunServiceChatStream {
         List<Map<String, Object>> options = new ArrayList<>();
         String detected = understanding.scenarioCode();
         for (IntentScenario s : allScenarios) {
-            if (s.isGeneral()) continue;
+            if (s.isGeneral()) { continue; }
             if (s.code().equals(detected)) {
                 Map<String, Object> opt = new LinkedHashMap<>();
                 opt.put("code", s.code());
@@ -616,7 +543,16 @@ public class QianXunServiceChatStream {
         return llm.isMockEnabled();
     }
 
-    private ChatEndpoint resolveChatEndpoint(IntentScenario scenario) {
+    private ChatEndpoint resolveChatEndpoint(IntentScenario scenario, String selectedModelCode) {
+        if (selectedModelCode != null && !selectedModelCode.isBlank()) {
+            var selected = modelRegistryRepository.findByCode(selectedModelCode.trim());
+            if (selected.isPresent() && selected.get().enabled()) {
+                var m = selected.get();
+                String baseUrl = m.baseUrl() == null ? "" : m.baseUrl().trim();
+                // registry.code 即上游 model 字段，便于“配置选择”
+                return new ChatEndpoint(baseUrl, resolveApiKeyByProvider(m.provider()), m.code());
+            }
+        }
         QianxunProperties.Hermes hermes = properties.getHermes();
         ChatEndpoint base;
         if (hermes.isEnabled()) {
@@ -637,6 +573,14 @@ public class QianXunServiceChatStream {
         return base;
     }
 
+    private String resolveApiKeyByProvider(String provider) {
+        String p = provider == null ? "" : provider.trim().toLowerCase();
+        if ("kimi-coding".equals(p)) {
+            return coalesce(System.getenv("KIMI_API_KEY"), properties.getLlm().getApiKey());
+        }
+        return properties.getLlm().getApiKey();
+    }
+
     private String resolveNluModel(QianxunProperties.Hermes hermes) {
         String m = hermes.getNlu().getModel();
         if (m != null && !m.trim().isEmpty()) return m.trim();
@@ -648,7 +592,7 @@ public class QianXunServiceChatStream {
     private static List<Map<String, String>> toOpenAiMessages(List<ChatMessage> history) {
         List<Map<String, String>> out = new ArrayList<>();
         for (ChatMessage m : history) {
-            if (!"user".equals(m.role()) && !"assistant".equals(m.role()) && !"system".equals(m.role())) continue;
+            if (!"user".equals(m.role()) && !"assistant".equals(m.role()) && !"system".equals(m.role())) { continue; }
             LinkedHashMap<String, String> row = new LinkedHashMap<>();
             row.put("role", m.role());
             // 对深度思考消息，将 think_content 还原为 <think>...</think> 前缀，
@@ -679,4 +623,220 @@ public class QianXunServiceChatStream {
     private static String nullSafe(String v) { return v == null ? "" : v; }
 
     private record ChatEndpoint(String baseUrl, String apiKey, String model) {}
+
+    private static class StreamContext {
+        private final SseEmitter emitter;
+        private final ChatActivityLog.Builder logBuilder;
+        private final boolean deepMode;
+        private final StringBuilder responseText = new StringBuilder();
+        private final StringBuilder thinkText    = new StringBuilder();
+        private IntentScenario scenario;
+
+        StreamContext(SseEmitter emitter, ChatActivityLog.Builder logBuilder, boolean deepMode) {
+            this.emitter = emitter;
+            this.logBuilder = logBuilder;
+            this.deepMode = deepMode;
+        }
+        SseEmitter emitter()    { return emitter; }
+        ChatActivityLog.Builder logBuilder() { return logBuilder; }
+        boolean deepMode()      { return deepMode; }
+        IntentScenario scenario()    { return scenario; }
+        void setScenario(IntentScenario s) { this.scenario = s; }
+    }
+
+    // ── 各阶段拆分方法 ─────────────────────────────────────────────────────────
+
+    private boolean validateConfig() {
+        boolean useMock = shouldUseMock();
+        if (!useMock) {
+            ChatEndpoint preview = resolveChatEndpoint(null, null);
+            if (preview.baseUrl().isBlank()) {
+                throw new IllegalStateException("未配置 LLM/Hermes 的 base-url");
+            }
+            if (!properties.getHermes().isEnabled() && preview.apiKey().trim().isEmpty()) {
+                throw new IllegalStateException("缺少 OPENAI_API_KEY（或 qianxun.llm.api-key）");
+            }
+        }
+        return useMock;
+    }
+
+    private IntentSlotUnderstanding runNluPhase(
+            String userContent, List<ChatMessage> history,
+            String confirmedScenarioCode, boolean useMock
+    ) throws Exception {
+        IntentSlotUnderstanding result;
+        if (confirmedScenarioCode != null && !confirmedScenarioCode.isBlank()) {
+            result = buildFromConfirmedScenario(confirmedScenarioCode, intentScenarioService.listEnabled());
+            log.info("意图已由用户确认: code={}", confirmedScenarioCode);
+        } else {
+            result = maybeUnderstand(userContent, history, useMock);
+        }
+        return result;
+    }
+
+    private void handleNluResult(
+            StreamContext ctx,
+            IntentSlotUnderstanding understanding,
+            String userContent,
+            List<Map<String, String>> llmMessages,
+            boolean hasPriorTurns,
+            String confirmedScenarioCode
+    ) {
+        IntentScenario scenario = understanding.scenario();
+        fillNluFields(ctx.logBuilder(), understanding);
+        sendAnalysis(ctx.emitter(), understanding);
+        if (understanding.agentSkill() != null && !understanding.agentSkill().isBlank()) {
+            sendEvent(ctx.emitter(), "agent_step", Map.of(
+                    "type", "agent_skill",
+                    "label", understanding.agentSkill(),
+                    "detail", understanding.scenarioName() == null ? "" : understanding.scenarioName()
+            ));
+        }
+        // 未命中场景（general）或置信度低于阈值时，直接使用 general 场景回答，不触发澄清
+        List<Map<String, String>> augmented = augmentWithScenarioAndNlu(llmMessages, understanding, hasPriorTurns);
+        llmMessages.clear();
+        llmMessages.addAll(augmented);
+        ctx.setScenario(scenario);
+    }
+
+    private void handleLowConfidence(StreamContext ctx, IntentSlotUnderstanding understanding, String userContent) {
+        List<IntentScenario> allScenarios = intentScenarioService.listEnabled();
+        sendClarification(ctx.emitter(), understanding, userContent, allScenarios);
+        String msg = "🤔 您的问题意图尚不明确（置信度 "
+                + Math.round(understanding.confidence() * 100) + "%），请选择您想调研的方向。";
+        String sessionId = ctx.logBuilder().build().sessionId();
+        var saved = sessionService.appendAssistantMessage(
+                sessionId, msg,
+                ctx.deepMode() ? ChatMessage.MODE_DEEP : ChatMessage.MODE_QUICK,
+                null, null
+        );
+        ctx.logBuilder().assistantMessageId(saved.id())
+                        .status(ChatActivityLog.STATUS_MOCK)
+                        .totalDurationMs(System.currentTimeMillis());
+        activityLogService.saveLog(ctx.logBuilder().build());
+        sendEvent(ctx.emitter(), "done", Map.of(
+                "assistantMessageId", saved.id(),
+                "sessionId", sessionId,
+                "clarification", true
+        ));
+        ctx.emitter().complete();
+        throw new StreamAbortException();
+    }
+
+    private void callLlmStream(
+            StreamContext ctx,
+            List<Map<String, String>> llmMessages,
+            boolean useMock,
+            String userContent,
+            String modelCode
+    ) throws Exception {
+        ChatEndpoint endpoint = resolveChatEndpoint(ctx.scenario(), modelCode);
+        ctx.logBuilder().llmEndpoint(endpoint.baseUrl()).llmModel(endpoint.model());
+        ThinkBlockStreamParser thinkParser = ctx.deepMode() ? new ThinkBlockStreamParser() : null;
+
+        long llmStart = System.currentTimeMillis();
+        if (useMock) {
+            ctx.logBuilder().status(ChatActivityLog.STATUS_MOCK);
+            ctx.logBuilder().llmRequestJson(buildMockRequestNote(userContent));
+            openAiClient.streamMockReply(userContent, token ->
+                handleToken(ctx.emitter(), token, ctx.deepMode(), thinkParser, ctx.responseText, ctx.thinkText)
+            );
+        } else {
+            String requestJson = buildLlmRequestJson(endpoint.model(), llmMessages);
+            ctx.logBuilder().llmRequestJson(requestJson);
+            OpenAiCompatibleStreamClient.StreamCompletionMeta streamMeta = openAiClient.streamChatCompletions(
+                    endpoint.baseUrl(), endpoint.apiKey(), endpoint.model(), llmMessages,
+                    token -> handleToken(ctx.emitter(), token, ctx.deepMode(), thinkParser, ctx.responseText, ctx.thinkText),
+                    toolCall -> sendToolCallEvent(ctx.emitter(), toolCall)
+            );
+            ctx.logBuilder().llmDurationMs(System.currentTimeMillis() - llmStart);
+            if (!streamMeta.sawDone() || "length".equals(streamMeta.finishReason())) {
+                String msg = "length".equals(streamMeta.finishReason())
+                        ? "回答可能因输出长度上限被截断，可调大环境变量 QIANXUN_LLM_MAX_TOKENS 或 qianxun.llm.max-tokens。"
+                        : "上游流式连接在未正常结束时断开，若正文不完整请重试。";
+                sendEvent(ctx.emitter(), "stream_warning", Map.of(
+                        "finishReason", streamMeta.finishReason() == null ? "" : streamMeta.finishReason(),
+                        "sawDone", streamMeta.sawDone(),
+                        "message", msg
+                ));
+            }
+        }
+        if (thinkParser != null) {
+            for (ThinkBlockStreamParser.Chunk chunk : thinkParser.flush()) {
+                routeChunk(ctx.emitter(), chunk, ctx.responseText, ctx.thinkText);
+            }
+        }
+        ctx.logBuilder().llmResponseText(ctx.responseText.toString());
+        ctx.logBuilder().thinkContent(ctx.thinkText.isEmpty() ? null : ctx.thinkText.toString());
+        if (ctx.deepMode()) {
+            sendEvent(ctx.emitter(), "think_end", Map.of("thinkContent", ctx.thinkText.isEmpty() ? "" : ctx.thinkText));
+        }
+    }
+
+    private void parseAndSendEntities(StreamContext ctx) {
+        EntityBlockParser.Result entityParse = EntityBlockParser.parse(ctx.responseText.toString(), objectMapper);
+        String answerClean = entityParse.cleanContent();
+        ctx.logBuilder().llmResponseText(answerClean);
+
+        JsonNode entityArr = entityParse.entitiesArray();
+        String entityCardsJson = null;
+        try {
+            if (entityArr != null && entityArr.isArray() && !entityArr.isEmpty()) {
+                entityCardsJson = objectMapper.writeValueAsString(entityArr);
+            }
+        } catch (Exception ex) {
+            log.debug("实体 JSON 序列化失败（忽略）: {}", ex.toString());
+        }
+        try {
+            String itemsJson = entityArr == null || entityArr.isNull() || !entityArr.isArray()
+                    ? "[]" : objectMapper.writeValueAsString(entityArr);
+            sendEvent(ctx.emitter(), "entities", Map.of("itemsJson", itemsJson));
+        } catch (Exception ex) {
+            log.debug("entities SSE 序列化失败（忽略）: {}", ex.toString());
+        }
+        ctx.logBuilder().nluRawResponse(entityCardsJson);
+    }
+
+    private void saveAndComplete(StreamContext ctx) {
+        String sessionId = ctx.logBuilder().build().sessionId();
+        String answer    = ctx.logBuilder().build().llmResponseText();
+        String think     = ctx.logBuilder().build().thinkContent();
+        String entities  = ctx.logBuilder().build().nluRawResponse();
+        var saved = sessionService.appendAssistantMessage(
+                sessionId, answer,
+                ctx.deepMode() ? ChatMessage.MODE_DEEP : ChatMessage.MODE_QUICK,
+                think, entities
+        );
+        ctx.logBuilder().assistantMessageId(saved.id())
+                        .totalDurationMs(System.currentTimeMillis());
+        activityLogService.saveLog(ctx.logBuilder().build());
+        sendEvent(ctx.emitter(), "done", Map.of(
+                "assistantMessageId", saved.id(),
+                "sessionId", sessionId
+        ));
+        ctx.emitter().complete();
+    }
+
+    private void handleStreamError(StreamContext ctx, long totalStart, Throwable ex) {
+        if (ex instanceof StreamAbortException) { return; }
+        log.warn("流式问答失败: {}", ex.toString());
+        activityLogService.saveLog(
+                ctx.logBuilder().status(ChatActivityLog.STATUS_ERROR)
+                                  .errorMessage(ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage())
+                                  .totalDurationMs(System.currentTimeMillis() - totalStart)
+                                  .build()
+        );
+        try {
+            sendEvent(ctx.emitter(), "error", Map.of("message", ex.getMessage() == null ? "unknown" : ex.getMessage()));
+        } catch (Exception ignored) {}
+        if (ex instanceof Exception e) {
+            ctx.emitter().completeWithError(e);
+        } else {
+            ctx.emitter().completeWithError(new UncheckedIOException(new IOException(ex)));
+        }
+    }
+
+    private static class StreamAbortException extends RuntimeException {
+        StreamAbortException() { super(null, null, false, false); }
+    }
 }

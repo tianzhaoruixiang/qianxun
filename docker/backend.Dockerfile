@@ -15,8 +15,9 @@ COPY backend/pom.xml ./pom.xml
 RUN mvn -s /root/.m2/settings.xml -B -ntp -DskipTests dependency:resolve-plugins dependency:resolve
 
 COPY backend/src ./src
-RUN mvn -s /root/.m2/settings.xml -B -ntp -DskipTests package \
- && cp target/qianxun-server-*.jar /tmp/app.jar
+RUN mvn -s /root/.m2/settings.xml -B -ntp -Dmaven.test.skip=true -Dassembly.skipAssembly=true -Dmaven.antrun.skip=true package \
+ && JAR_PATH="$(ls target/*.jar | head -n 1)" \
+ && cp "${JAR_PATH}" /tmp/app.jar
 
 # ───────── Runtime：Temurin JRE 21 ─────────
 FROM eclipse-temurin:21-jre

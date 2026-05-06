@@ -1,77 +1,52 @@
-# 千寻 · 一键编排：Doris (4.0.2) + Hermes Agent (Kimi) + 千寻后端 + 千寻前端
+# 千寻 · 一键编排：TiDB + Hermes Agent (Kimi) + 千寻后端 + 千寻前端
 # 入口：cd docker && ./bin/up.sh
 # 关停：./bin/down.sh        # 仅关停  /  ./bin/down.sh -v 同时清理数据卷
 # 验证：./bin/verify.sh
 #
 # 所有可调项集中在同目录 .env（参考 .env.example）
 # 持久化数据目录（bind mount）：./data/
-#   ├── doris/fe/{meta,log}
-#   ├── doris/be/{storage,log}
+#   ├── tidb/
 #   └── hermes/
 
 name: qianxun
 
 services:
-  # ───────────────────────────── Doris FE ─────────────────────────────
-  doris-fe:
-    # 官方镜像仅 linux/amd64；在 arm64 主机上必须走 QEMU 模拟，否则易出现 “platform mismatch” 或 FE 段错误退出 139
-    platform: linux/amd64
-    image: apache/doris:${DORIS_FE_TAG:-fe-4.0.2}
-    container_name: qianxun-doris-fe
-    hostname: fe-01
-    environment:
-      - FE_SERVERS=fe1:172.29.80.2:9010
-      - FE_ID=1
+  # ─────────────────────────────── TiDB ───────────────────────────────
+  tidb:
+    image: pingcap/tidb:${TIDB_TAG:-v7.5.3}
+    container_name: qianxun-tidb
+    command:
+      - /tidb-server
+      - --store=unistore
+      - --path=/data/tidb
+      - --host=0.0.0.0
+      - --advertise-address=tidb
+      - --status=10080
+      - --log-level=warn
+    restart: unless-stopped
     ports:
-      - "${DORIS_FE_HTTP_PORT:-8030}:8030"
-      - "${DORIS_FE_QUERY_PORT:-9030}:9030"
+      - "${TIDB_PORT:-4000}:4000"
+      - "${TIDB_STATUS_PORT:-10080}:10080"
     volumes:
-      - ./data/doris/fe/meta:/opt/apache-doris/fe/doris-meta
-      - ./data/doris/fe/log:/opt/apache-doris/fe/log
+      - ./data/tidb:/data/tidb
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8030/api/health >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:10080/status >/dev/null || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 60
       start_period: 30s
     networks:
-      qianxun_net:
-        ipv4_address: 172.29.80.2
-
-  # ───────────────────────────── Doris BE ─────────────────────────────
-  doris-be:
-    platform: linux/amd64
-    image: apache/doris:${DORIS_BE_TAG:-be-4.0.2}
-    container_name: qianxun-doris-be
-    hostname: be-01
-    depends_on:
-      doris-fe:
-        condition: service_healthy
-    environment:
-      - FE_SERVERS=fe1:172.29.80.2:9010
-      - BE_ADDR=172.29.80.3:9050
-    ports:
-      - "${DORIS_BE_WEBSERVER_PORT:-8040}:8040"
-    volumes:
-      - ./data/doris/be/storage:/opt/apache-doris/be/storage
-      - ./data/doris/be/log:/opt/apache-doris/be/log
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8040/api/health >/dev/null || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 60
-      start_period: 30s
-    networks:
-      qianxun_net:
-        ipv4_address: 172.29.80.3
+      - qianxun_net
 
   # ─────────────────────────── Hermes Agent ───────────────────────────
   hermes-agent:
-    platform: linux/amd64
     image: ${HERMES_IMAGES:-nousresearch/hermes-agent:latest}
+    platform: linux/arm64
     container_name: qianxun-hermes-agent
     restart: unless-stopped
     command: gateway run
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       # OpenAI 兼容 API server（必须显式开启 + 绑定到容器 0.0.0.0）
       - API_SERVER_ENABLED=true
@@ -79,9 +54,14 @@ services:
       - API_SERVER_PORT=8642
       - API_SERVER_KEY=${API_SERVER_KEY:-qianxun-local-dev-key}
       - GATEWAY_ALLOW_ALL_USERS=true
-      # Kimi / Moonshot（中国站默认 https://api.moonshot.cn/v1）
-      - KIMI_API_KEY=${KIMI_API_KEY:-}
+      # OpenAI/Kimi 双通道统一指向 Moonshot，避免 provider 切换时路由到错误端点
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-${KIMI_API_KEY:-EMPTY}}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-${KIMI_BASE_URL:-https://api.moonshot.cn/v1}}
+      - OPENAI_MODEL=${OPENAI_MODEL:-${KIMI_MODEL:-kimi-k2-turbo-preview}}
+      # Kimi provider（Hermes 原生支持）
+      - KIMI_API_KEY=${KIMI_API_KEY:-EMPTY}
       - KIMI_BASE_URL=${KIMI_BASE_URL:-https://api.moonshot.cn/v1}
+      - KIMI_MODEL=${KIMI_MODEL:-kimi-k2-turbo-preview}
       # Tavily：Hermes 的 web_search / web_extract 等（与 ~/.hermes 文档一致，可用环境变量注入）
       - TAVILY_API_KEY=${TAVILY_API_KEY:-}
     ports:
@@ -112,18 +92,16 @@ services:
       dockerfile: docker/backend.Dockerfile
     restart: on-failure
     depends_on:
-      doris-fe:
-        condition: service_healthy
-      doris-be:
+      tidb:
         condition: service_healthy
       hermes-agent:
         condition: service_started
     environment:
-      # Doris JDBC（容器内通过服务名互访）
-      - DORIS_HOST=doris-fe
-      - DORIS_PORT=9030
-      - DORIS_USER=${DORIS_USER:-root}
-      - DORIS_PASSWORD=${DORIS_PASSWORD:-}
+      # TiDB JDBC（容器内通过服务名互访）
+      - TIDB_DB_URL=jdbc:mysql://tidb:4000/qianxun?createDatabaseIfNotExist=true&useUnicode=true&characterEncoding=UTF-8&useSSL=false&rewriteBatchedStatements=true&allowMultiQueries=true
+      - TIDB_USER=${TIDB_USER:-root}
+      - TIDB_PASSWORD=${TIDB_PASSWORD:-}
+      - DORIS_ENABLE=false
       # Hermes 对接
       - QIANXUN_HERMES_ENABLED=${QIANXUN_HERMES_ENABLED:-true}
       - QIANXUN_HERMES_BASE_URL=http://hermes-agent:8642/v1
@@ -141,7 +119,7 @@ services:
     ports:
       - "${QIANXUN_BACKEND_PORT:-8080}:8080"
     healthcheck:
-      test: ["CMD", "wget", "-qO/dev/null", "http://127.0.0.1:8080/QianXunService/sessions"]
+      test: ["CMD-SHELL", "wget --method=POST --header='Content-Type: application/json' --body-data='{\"jsonArg\":{},\"generalArgument\":{\"userId\":\"1\",\"loginName\":\"admin\",\"ip\":\"127.0.0.1\",\"coralKey\":\"\"}}' -qO/dev/null http://127.0.0.1:8080/QianXunService/sessions/list"]
       interval: 5s
       timeout: 5s
       retries: 60
@@ -151,7 +129,7 @@ services:
 
   # ──────────────────────────── 千寻前端 ────────────────────────────
   qianxun-frontend:
-    image: qianxun/frontend:${QIANXUN_TAG:-dev}
+    image: qianxun/frontend:amd64-dev
     container_name: qianxun-frontend
     build:
       context: ..
@@ -177,7 +155,7 @@ networks:
     driver: bridge
     ipam:
       config:
-        # 固定 .2 / .3 给 Doris FE/BE；其余服务自动分配在 .128/25 段，避免抢占
+        # 默认网段；如与宿主网络冲突可在 .env 覆盖
         - subnet: ${DORIS_SUBNET:-172.29.80.0/24}
           ip_range: ${DORIS_IP_RANGE:-172.29.80.128/25}
           gateway: ${DORIS_GATEWAY:-172.29.80.1}

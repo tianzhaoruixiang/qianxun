@@ -2,6 +2,7 @@ package com.qianxun.repo;
 
 import com.qianxun.config.QianxunProperties;
 import com.qianxun.domain.ChatActivityLog;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
@@ -48,7 +49,7 @@ public class ChatActivityLogRepository {
     private final JdbcTemplate jdbc;
     private final String table;
 
-    public ChatActivityLogRepository(JdbcTemplate jdbc, QianxunProperties properties) {
+    public ChatActivityLogRepository(@Qualifier("tidbJdbcTemplate") JdbcTemplate jdbc, QianxunProperties properties) {
         this.jdbc = jdbc;
         this.table = "`" + properties.getDb() + "`.`chat_activity_log`";
     }

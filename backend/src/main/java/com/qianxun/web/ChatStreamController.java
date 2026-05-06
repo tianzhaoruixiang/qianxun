@@ -47,8 +47,11 @@ public class ChatStreamController {
         // 将 userId 和 deepMode 显式传入 SSE 工作线程，因为 ThreadLocal 不跨线程
         boolean deepMode = request.isDeep();
         String confirmedScenarioCode = request.confirmedScenarioCode();
+        String modelCode = request.modelCode();
+        String datasetCode = request.datasetCode();
+        var selectedFileIds = request.selectedFileIds();
         sseExecutor.execute(() -> chatStreamService.streamAnswer(
-                userId, sessionId, request.content(), deepMode, confirmedScenarioCode, emitter));
+                userId, sessionId, request.content(), deepMode, confirmedScenarioCode, modelCode, datasetCode, selectedFileIds, emitter));
         return emitter;
     }
 }

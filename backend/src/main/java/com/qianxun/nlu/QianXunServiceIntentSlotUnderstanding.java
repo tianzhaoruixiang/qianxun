@@ -188,7 +188,7 @@ public class QianXunServiceIntentSlotUnderstanding {
     }
 
     static String buildScenarioSystemPrompt(List<IntentScenario> scenarios) {
-        StringBuilder sb = new StringBuilder();
+        final StringBuilder sb = new StringBuilder();
         sb.append("你是「千寻」系统的 NLU 模块，请将用户问题映射到下列「调研场景」之一，并抽取槽位。\n\n");
         sb.append("## 可用场景\n");
         for (IntentScenario s : scenarios) {
@@ -295,36 +295,31 @@ public class QianXunServiceIntentSlotUnderstanding {
         IntentScenario best = null;
         int bestScore = 0;
         for (IntentScenario s : scenarios) {
-            if (s.isGeneral()) {
-                continue;
-            }
-            int score = 0;
-            if (s.name() != null && !s.name().isBlank()) {
-                for (String bg : bigrams(s.name())) {
-                    if (userBigrams.contains(bg)) {
-                        score += 2;
-                    }
-                }
-            }
-            for (String e : s.safeExamples()) {
-                if (e == null || e.isBlank()) {
-                    continue;
-                }
-                for (String bg : bigrams(e)) {
-                    if (STOP_BIGRAMS.contains(bg)) {
-                        continue;
-                    }
-                    if (userBigrams.contains(bg)) {
-                        score += 1;
-                    }
-                }
-            }
+            if (s.isGeneral()) { continue; }
+            int score = scoreScenario(userBigrams, s);
             if (score > bestScore) {
                 bestScore = score;
                 best = s;
             }
         }
         return bestScore >= 4 ? best : null;
+    }
+
+    private static int scoreScenario(Set<String> userBigrams, IntentScenario s) {
+        int score = 0;
+        if (s.name() != null && !s.name().isBlank()) {
+            for (String bg : bigrams(s.name())) {
+                if (userBigrams.contains(bg)) { score += 2; }
+            }
+        }
+        for (String e : s.safeExamples()) {
+            if (e == null || e.isBlank()) { continue; }
+            for (String bg : bigrams(e)) {
+                if (STOP_BIGRAMS.contains(bg)) { continue; }
+                if (userBigrams.contains(bg)) { score += 1; }
+            }
+        }
+        return score;
     }
 
     private static Set<String> bigrams(String text) {
