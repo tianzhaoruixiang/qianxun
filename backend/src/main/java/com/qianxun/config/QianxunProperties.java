@@ -30,11 +30,15 @@ public class QianxunProperties {
         private String apiKey = "";
         private String chatModel = "kimi-k2.5";
         /**
-         * 是否将意图场景的 agent_skill 字段作为 OpenAI 兼容请求的 model 名称使用。
-         * 默认 false：Hermes Agent 网关不通过 model 名挑选「技能」，agent_skill
-         * 仅作为 NLU/路由元数据下发；如果你的网关确实按 model 多模型路由，可改为 true。
+         * 未启用 Hermes 直连时，是否与第三方 OpenAI 兼容网关配合，将 agent_skill 作为 model。
          */
         private boolean useSkillAsModel = false;
+
+        /**
+         * 启用 Hermes 且 NLU 命中场景的 agent_skill 非空时，是否用其覆盖流式请求的 model（技能路由）。
+         * 默认 true：先 NLU，再按意图调用 Hermes 对应技能。
+         */
+        private boolean routeIntentSkill = true;
 
         private final Nlu nlu = new Nlu();
 
@@ -76,6 +80,14 @@ public class QianxunProperties {
 
         public void setUseSkillAsModel(boolean useSkillAsModel) {
             this.useSkillAsModel = useSkillAsModel;
+        }
+
+        public boolean isRouteIntentSkill() {
+            return routeIntentSkill;
+        }
+
+        public void setRouteIntentSkill(boolean routeIntentSkill) {
+            this.routeIntentSkill = routeIntentSkill;
         }
 
         public Nlu getNlu() {

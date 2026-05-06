@@ -108,6 +108,8 @@ services:
       - HERMES_API_KEY=${API_SERVER_KEY:-qianxun-local-dev-key}
       - QIANXUN_HERMES_CHAT_MODEL=${QIANXUN_HERMES_CHAT_MODEL:-hermes-agent}
       - QIANXUN_HERMES_NLU_ENABLED=${QIANXUN_HERMES_NLU_ENABLED:-true}
+      # NLU 命中场景后，是否用意图场景的 agent_skill 作为流式 model（Hermes 技能路由）
+      - QIANXUN_HERMES_ROUTE_INTENT_SKILL=${QIANXUN_HERMES_ROUTE_INTENT_SKILL:-true}
       # 兜底 LLM（可选）
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - QIANXUN_LLM_BASE_URL=${QIANXUN_LLM_BASE_URL:-https://api.openai.com/v1}

@@ -170,9 +170,10 @@ public class RegistryController {
     }
 
     private AgentRegistryResponse toAgentResponse(AgentRegistryItem a) {
+        String tpl = a.promptTemplate() == null ? "" : a.promptTemplate();
         return new AgentRegistryResponse(
                 a.id(), a.code(), a.name(), a.category(), a.description(),
-                a.icon(), a.modelCode(), a.priority(), a.enabled()
+                a.icon(), a.modelCode(), tpl, a.priority(), a.enabled()
         );
     }
 

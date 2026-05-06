@@ -48,10 +48,10 @@ public class ChatStreamController {
         boolean deepMode = request.isDeep();
         String confirmedScenarioCode = request.confirmedScenarioCode();
         String modelCode = request.modelCode();
-        String datasetCode = request.datasetCode();
+        List<String> datasetCodes = request.resolvedDatasetCodes();
         var selectedFileIds = request.selectedFileIds();
         sseExecutor.execute(() -> chatStreamService.streamAnswer(
-                userId, sessionId, request.content(), deepMode, confirmedScenarioCode, modelCode, datasetCode, selectedFileIds, emitter));
+                userId, sessionId, request.content(), deepMode, confirmedScenarioCode, modelCode, datasetCodes, selectedFileIds, emitter));
         return emitter;
     }
 }

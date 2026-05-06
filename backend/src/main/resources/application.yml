@@ -40,10 +40,10 @@ qianxun:
     # Hermes API server 通告的 model 名（默认 profile 即 hermes-agent）；
     # 真正调用的下游模型/Provider 由 hermes/config.yaml 决定（当前为 kimi-coding-cn / kimi-k2.5）
     chat-model: ${QIANXUN_HERMES_CHAT_MODEL:hermes-agent}
-    # 是否把意图场景里的 agent_skill 作为 OpenAI model 字段覆盖 chat-model；
-    # Hermes Agent 的「技能」并不通过 model 名暴露，因此默认 false，
-    # agent_skill 仅作为 NLU 上下文/路由元数据下发与日志。
+    # 未启用 Hermes 时，是否与第三方 OpenAI 兼容网关配合，用 agent_skill 作为 model
     use-skill-as-model: ${QIANXUN_HERMES_USE_SKILL_AS_MODEL:false}
+    # 启用 Hermes 且 NLU 命中场景的 agent_skill 非空时，流式请求是否用其覆盖 chat-model（技能路由）
+    route-intent-skill: ${QIANXUN_HERMES_ROUTE_INTENT_SKILL:true}
     nlu:
       # 在流式聊天前先做一次非流式意图识别与槽位抽取，并通过 SSE event:analysis 下发给前端
       enabled: ${QIANXUN_HERMES_NLU_ENABLED:true}

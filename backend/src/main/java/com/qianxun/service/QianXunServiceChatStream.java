@@ -6,6 +6,7 @@ import com.qianxun.chat.EntityBlockParser;
 import com.qianxun.config.QianxunProperties;
 import com.qianxun.domain.ChatActivityLog;
 import com.qianxun.domain.ChatMessage;
+import com.qianxun.domain.DatasetRegistryItem;
 import com.qianxun.domain.IntentScenario;
 import com.qianxun.llm.OpenAiCompatibleStreamClient;
 import com.qianxun.nlu.IntentSlotUnderstanding;
@@ -24,6 +25,7 @@ import java.io.UncheckedIOException;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -115,7 +117,7 @@ public class QianXunServiceChatStream {
             String userContent, boolean deepMode,
             String confirmedScenarioCode,
             String modelCode,
-            String datasetCode,
+            List<String> datasetCodes,
             List<String> selectedFileIds,
             SseEmitter emitter
     ) {
@@ -152,7 +154,7 @@ public class QianXunServiceChatStream {
                 llmMessages = injectDeepThinkPrompt(llmMessages);
                 sendEvent(emitter, "think_start", Map.of());
             }
-            llmMessages = injectDatasetContext(llmMessages, datasetCode);
+            llmMessages = injectDatasetContext(llmMessages, datasetCodes);
             llmMessages = injectSelectedFilesContext(llmMessages, selectedFileIds);
 
             // ── LLM 阶段 ───────────────────────────────────────────────────────
@@ -255,28 +257,61 @@ public class QianXunServiceChatStream {
         return out;
     }
 
-    private List<Map<String, String>> injectDatasetContext(List<Map<String, String>> messages, String datasetCode) {
-        if (datasetCode == null || datasetCode.isBlank()) {
+    private List<Map<String, String>> injectDatasetContext(List<Map<String, String>> messages, List<String> datasetCodes) {
+        if (datasetCodes == null || datasetCodes.isEmpty()) {
             return messages;
         }
-        var datasetOpt = datasetRegistryRepository.findByCode(datasetCode.trim());
-        if (datasetOpt.isEmpty() || !datasetOpt.get().enabled()) {
+        List<DatasetRegistryItem> resolved = new ArrayList<>();
+        LinkedHashSet<String> seen = new LinkedHashSet<>();
+        for (String code : datasetCodes) {
+            if (code == null || code.isBlank()) {
+                continue;
+            }
+            String trim = code.trim();
+            if (!seen.add(trim)) {
+                continue;
+            }
+            datasetRegistryRepository.findByCode(trim)
+                    .filter(DatasetRegistryItem::enabled)
+                    .ifPresent(resolved::add);
+        }
+        if (resolved.isEmpty()) {
             return messages;
         }
-        var d = datasetOpt.get();
-        String datasetPrompt = """
-                当前会话已选择数据集，请优先参考其语义范围回答：
-                - 数据集编码：%s
-                - 数据集名称：%s
-                - 描述：%s
-                - 来源类型：%s
-                - 来源引用：%s
-                - 文档数量：%d
-                若问题超出该数据集范围，请明确提示并给出可扩展建议。
-                """.formatted(
-                nullSafe(d.code()), nullSafe(d.name()), nullSafe(d.description()),
-                nullSafe(d.sourceType()), nullSafe(d.sourceRef()), d.docCount()
-        );
+
+        String datasetPrompt;
+        if (resolved.size() == 1) {
+            var d = resolved.get(0);
+            datasetPrompt = """
+                    当前会话已选择数据集，请优先参考其语义范围回答：
+                    - 数据集编码：%s
+                    - 数据集名称：%s
+                    - 描述：%s
+                    - 来源类型：%s
+                    - 来源引用：%s
+                    - 文档数量：%d
+                    若问题超出该数据集范围，请明确提示并给出可扩展建议。
+                    """.formatted(
+                    nullSafe(d.code()), nullSafe(d.name()), nullSafe(d.description()),
+                    nullSafe(d.sourceType()), nullSafe(d.sourceRef()), d.docCount()
+            );
+        } else {
+            StringBuilder sb = new StringBuilder("""
+                    当前会话已选择多个数据集，请综合下列语义范围作答；交叉引用时请保持一致性。
+                    若问题超出下列范围，请明确说明并给出扩展建议。
+
+                    """);
+            for (int i = 0; i < resolved.size(); i++) {
+                var d = resolved.get(i);
+                sb.append("【").append(i + 1).append("】 ").append(nullSafe(d.name()))
+                        .append("（编码 ").append(nullSafe(d.code())).append("）\n");
+                sb.append("- 描述：").append(nullSafe(d.description())).append("\n");
+                sb.append("- 来源类型：").append(nullSafe(d.sourceType())).append("\n");
+                sb.append("- 来源引用：").append(nullSafe(d.sourceRef())).append("\n");
+                sb.append("- 文档数量：").append(d.docCount()).append("\n\n");
+            }
+            datasetPrompt = sb.toString();
+        }
         List<Map<String, String>> out = new ArrayList<>(messages.size() + 1);
         LinkedHashMap<String, String> sys = new LinkedHashMap<>();
         sys.put("role", "system");
@@ -569,10 +604,25 @@ public class QianXunServiceChatStream {
             QianxunProperties.Llm llm = properties.getLlm();
             base = new ChatEndpoint(trim(llm.getBaseUrl()), llm.getApiKey(), llm.getModel());
         }
-        boolean allowSkillAsModel = !hermes.isEnabled() || hermes.isUseSkillAsModel();
-        if (allowSkillAsModel && scenario != null
-                && scenario.agentSkill() != null && !scenario.agentSkill().isBlank()) {
-            return new ChatEndpoint(base.baseUrl(), base.apiKey(), scenario.agentSkill().trim());
+        if (scenario == null) {
+            return base;
+        }
+        String skill = scenario.agentSkill();
+        if (skill == null || skill.isBlank()) {
+            return base;
+        }
+        String skillModel = skill.trim();
+        // Hermes：默认在 NLU 之后用 agent_skill 作为 OpenAI model，完成场景级技能路由
+        if (hermes.isEnabled()) {
+            if (hermes.isRouteIntentSkill() || hermes.isUseSkillAsModel()) {
+                log.info("Hermes 流式对话按意图路由 model={}（场景 code={}）", skillModel, scenario.code());
+                return new ChatEndpoint(base.baseUrl(), base.apiKey(), skillModel);
+            }
+            return base;
+        }
+        // 未启用 Hermes：仅在显式开启 useSkillAsModel 时用 skill 覆盖 model
+        if (hermes.isUseSkillAsModel()) {
+            return new ChatEndpoint(base.baseUrl(), base.apiKey(), skillModel);
         }
         return base;
     }

@@ -1,6 +1,5 @@
 package com.qianxun.service;
 
-import com.qianxun.domain.SuggestedQuestion;
 import com.qianxun.domain.ToolDisplayName;
 import com.qianxun.repo.SuggestedQuestionRepository;
 import com.qianxun.repo.ToolDisplayNameRepository;
