@@ -3,7 +3,9 @@ package com.qianxun.web;
 import com.qianxun.service.QianXunServiceWelcome;
 import com.qianxun.web.dto.ApiRequest;
 import com.qianxun.web.dto.ApiResponse;
+import com.qianxun.web.dto.UpdateWelcomePresetsRequest;
 import com.qianxun.web.dto.WelcomeBootstrapResponse;
+import com.qianxun.web.dto.WelcomePresetsResponse;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -24,5 +26,19 @@ public class WelcomeController {
     public ApiResponse<WelcomeBootstrapResponse> bootstrap(@RequestBody(required = false) ApiRequest<Object> request) {
         ApiRequestSupport.applyGeneralArgument(request);
         return ApiResponse.success(welcomeService.bootstrap());
+    }
+
+    @PostMapping("/presets")
+    public ApiResponse<WelcomePresetsResponse> presets(@RequestBody(required = false) ApiRequest<Object> request) {
+        ApiRequestSupport.applyGeneralArgument(request);
+        return ApiResponse.success(welcomeService.loadPresets());
+    }
+
+    @PostMapping("/presets/update")
+    public ApiResponse<WelcomePresetsResponse> updatePresets(
+            @RequestBody(required = false) ApiRequest<UpdateWelcomePresetsRequest> request
+    ) {
+        ApiRequestSupport.applyGeneralArgument(request);
+        return ApiResponse.success(welcomeService.updatePresets(ApiRequestSupport.jsonArg(request)));
     }
 }

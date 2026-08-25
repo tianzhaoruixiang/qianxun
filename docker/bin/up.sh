@@ -13,18 +13,114 @@ fi
 # ── 创建 bind-mount 数据目录（幂等） ──────────────────────────────────────
 echo "[up] 初始化持久化数据目录（./data/）..."
 mkdir -p \
+  data/tidb \
   data/doris/fe/meta \
   data/doris/fe/log  \
   data/doris/be/storage \
   data/doris/be/log  \
-  data/hermes
+  data/minio \
+  data/claudecode
+chmod -R a+rwX data/claudecode 2>/dev/null || true
+
+# s3fs 要把 FUSE 挂载传播给 claude-code：先把 data 绑成独立挂载点再标 rshared
+DATA_DIR="$(pwd)/data"
+make_data_rshared() {
+  if ! findmnt -n "${DATA_DIR}" >/dev/null 2>&1; then
+    mount --bind "${DATA_DIR}" "${DATA_DIR}" 2>/dev/null || return 1
+  fi
+  mount --make-rshared "${DATA_DIR}" 2>/dev/null
+}
+
+# 无 sudo 时，借 privileged 容器 + 宿主 nsenter 进入宿主编译命名空间
+make_data_rshared_via_docker() {
+  docker run --rm --privileged --pid=host \
+    -v /usr/bin/nsenter:/nsenter:ro \
+    alpine:3.20 \
+    /nsenter -t 1 -m -- sh -c "
+      mkdir -p '${DATA_DIR}/minio' '${DATA_DIR}/claudecode'
+      if ! findmnt -n '${DATA_DIR}' >/dev/null 2>&1; then
+        mount --bind '${DATA_DIR}' '${DATA_DIR}'
+      fi
+      mount --make-rshared '${DATA_DIR}'
+    "
+}
+
+# Claude Code /opt/data：
+#   默认 / HOST_S3FS=1   宿主 s3fs → MinIO 桶 claudecode（数据在对象存储）
+#   HOST_S3FS=0          本地 ./data/claudecode（Windows / 无 FUSE 时用）
+_qx_host_s3fs() {
+  if [ -n "${HOST_S3FS:-}" ]; then
+    printf '%s' "${HOST_S3FS}"
+    return
+  fi
+  if [ -f .env ]; then
+    local v
+    v=$(grep -E "^HOST_S3FS=" .env 2>/dev/null | tail -n 1 | cut -d= -f2-)
+    v=${v#\"}; v=${v%\"}; v=${v#\'}; v=${v%\'}
+    if [ -n "${v}" ]; then
+      printf '%s' "${v}"
+      return
+    fi
+  fi
+  printf '1'
+}
+HOST_S3FS="$(_qx_host_s3fs)"
+export HOST_S3FS
+
+if [ "${HOST_S3FS}" = "1" ]; then
+  echo "[up] HOST_S3FS=1：将用宿主 s3fs 把 MinIO claudecode 桶挂到 ./data/claudecode"
+  if make_data_rshared || make_data_rshared_via_docker; then
+    echo "[up] 已将 ${DATA_DIR} 设为 rshared（s3fs 挂载可传播进容器）"
+  else
+    echo "[up] ⚠ 未能把 ${DATA_DIR} 设为 rshared，Claude Code 可能看不到 MinIO 挂载"
+  fi
+  export HERMES_SEED_MIGRATE=1
+  export CLAUDE_SEED_MIGRATE=1
+else
+  echo "[up] Claude Code 使用本地 ./data/claudecode（HOST_S3FS=${HOST_S3FS}；用户上传仍走 MinIO）"
+fi
 
 echo "[up] 启用 Docker BuildKit"
 export DOCKER_BUILDKIT=1
 export COMPOSE_DOCKER_CLI_BUILD=1
 
-echo "[up] 构建镜像 + 启动容器（首次会拉取 maven/node/doris/hermes 镜像，可能较慢）"
-docker compose up -d --build --remove-orphans
+# Claude 上游：anthropic 直连 | openai 经 LiteLLM（方案 A）
+# shellcheck source=claude-upstream-env.sh
+source "${HERE}/claude-upstream-env.sh"
+
+echo "[up] 构建镜像 + 启动容器（首次会拉取 maven/node/tidb/litellm 镜像，可能较慢）"
+COMPOSE_ARGS=(up -d --build --remove-orphans)
+
+if [ "${HOST_S3FS}" = "1" ]; then
+  # 先起 MinIO 并完成桶初始化/本地种子迁移，再挂宿主 s3fs，最后起 Claude Code
+  echo "[up] 先启动 MinIO / minio-init…"
+  docker compose up -d minio minio-init
+  echo "[up] 等待 minio-init 完成…"
+  init_wait=0
+  while [ "${init_wait}" -lt 180 ]; do
+    st=$(docker inspect --format='{{.State.Status}}' qianxun-minio-init 2>/dev/null || echo "missing")
+    exit_code=$(docker inspect --format='{{.State.ExitCode}}' qianxun-minio-init 2>/dev/null || echo "1")
+    if [ "${st}" = "exited" ] && [ "${exit_code}" = "0" ]; then
+      echo "[up] ✓ minio-init 已完成"
+      break
+    fi
+    if [ "${st}" = "exited" ] && [ "${exit_code}" != "0" ]; then
+      echo "[up] ✗ minio-init 失败，日志：" >&2
+      docker logs --tail 80 qianxun-minio-init || true
+      exit 1
+    fi
+    sleep 2
+    init_wait=$((init_wait + 2))
+  done
+  if [ "${init_wait}" -ge 180 ]; then
+    echo "[up] ✗ minio-init 超时" >&2
+    docker logs --tail 80 qianxun-minio-init || true
+    exit 1
+  fi
+  "${HERE}/host-s3fs.sh" mount
+fi
+
+docker compose "${COMPOSE_ARGS[@]}"
 
 echo
 echo "[up] 等待后端就绪（轮询 Docker healthcheck，最多 5 分钟）..."

@@ -10,17 +10,19 @@ public record ChatMessageResponse(
         String sessionId,
         String role,
         String content,
-        /** "quick" 或 "deep"，user 消息为 null */
-        String thinkingMode,
-        /** deep 模式下 AI 的推理内容，user 消息为 null */
-        String thinkContent,
-        /** assistant：实体卡片 JSON 数组字符串，无则省略 */
         @JsonInclude(JsonInclude.Include.NON_EMPTY)
-        @JsonProperty("entityCards")
-        String entityCardsJson,
-        /** assistant：意图分析 JSON，无则省略 */
+        @JsonProperty("toolCalls")
+        String toolCallsJson,
         @JsonInclude(JsonInclude.Include.NON_EMPTY)
-        @JsonProperty("intentAnalysis")
-        String intentAnalysisJson,
-        Instant createdAt
+        @JsonProperty("usage")
+        String usageJson,
+        @JsonInclude(JsonInclude.Include.NON_EMPTY)
+        @JsonProperty("suggestions")
+        String suggestionsJson,
+        Instant createdAt,
+        /** completed | streaming | cancelled | error */
+        @JsonInclude(JsonInclude.Include.NON_EMPTY)
+        String status,
+        @JsonInclude(JsonInclude.Include.NON_EMPTY)
+        String runId
 ) {}

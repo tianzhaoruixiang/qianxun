@@ -4,6 +4,14 @@ server:
 spring:
   application:
     name: qianxun-server
+  servlet:
+    multipart:
+      max-file-size: ${QIANXUN_UPLOAD_MAX_MB:200}MB
+      max-request-size: ${QIANXUN_UPLOAD_MAX_REQUEST_MB:1024}MB
+  mvc:
+    async:
+      # 与 SseEmitter(0L) 一致：不因 MVC 异步默认超时掐断智能体长轮次
+      request-timeout: 0
   datasource:
     # 保留 spring.datasource 仅作默认连接参数；实际业务走 tidbDataSource
     url: ${SPRING_DATASOURCE_URL:jdbc:mysql://tidb:4000?useSSL=false&characterEncoding=utf-8&connectTimeout=15000&socketTimeout=600000}
@@ -15,6 +23,19 @@ spring:
 
 qianxun:
   db: qianxun
+  cors:
+    # 内网用 IP/主机名打开前端时必填覆盖；默认 *（Bearer JWT，无 Cookie）
+    allowed-origin-patterns: ${QIANXUN_CORS_ALLOWED_ORIGIN_PATTERNS:*}
+  auth:
+    # 生产环境务必通过环境变量覆盖 jwt-secret
+    enabled: ${QIANXUN_AUTH_ENABLED:true}
+    jwt-secret: ${QIANXUN_JWT_SECRET:qianxun-dev-jwt-secret-change-in-prod-min-32b}
+    jwt-expiration-seconds: ${QIANXUN_JWT_EXPIRATION_SECONDS:86400}
+    default-username: ${QIANXUN_AUTH_USERNAME:admin}
+    default-password: ${QIANXUN_AUTH_PASSWORD:admin123}
+    default-user-id: ${QIANXUN_AUTH_USER_ID:1}
+    default-display-name: ${QIANXUN_AUTH_DISPLAY_NAME:管理员}
+    # 以上 default-* 仅在 app_user 表尚无该用户名时写入种子管理员，不会覆盖已有密码
   llm:
     base-url: ${QIANXUN_LLM_BASE_URL:http://app-container-gateway:8642/v1}
     api-key: ${OPENAI_API_KEY:}
@@ -23,33 +44,40 @@ qianxun:
     mock-enabled: ${QIANXUN_LLM_MOCK:true}
     # 流式补全最大 token（过小会导致回答在句中被截断）
     max-tokens: ${QIANXUN_LLM_MAX_TOKENS:16384}
-    # JDK HttpClient 单次流式读完整响应体的超时（秒）
-    stream-timeout-seconds: ${QIANXUN_LLM_STREAM_TIMEOUT_SECONDS:3600}
+    # JDK HttpClient 整段流式墙钟超时（秒）。0 = 不限制（推荐：智能体工具循环可能很长）
+    stream-timeout-seconds: ${QIANXUN_LLM_STREAM_TIMEOUT_SECONDS:0}
 
-  # 深度思考模式：复用 hermes-agent，通过注入 CoT 系统提示词实现深度推理
-  # 留空则使用内置默认提示词，无需配置额外模型
-  deep-think:
-    system-prompt: ${QIANXUN_DEEP_SYSTEM_PROMPT:}
+  # 智能体运行器：独立容器中的 Claude Agent SDK 网关（HTTP NDJSON）
+  claude:
+    enabled: ${QIANXUN_CLAUDE_ENABLED:true}
+    base-url: ${QIANXUN_CLAUDE_BASE_URL:http://claude-code:8642}
+    api-key: ${CLAUDE_GATEWAY_KEY:}
+    chat-model: ${QIANXUN_CLAUDE_MODEL:qwen3.6-plus}
+    permission-mode: ${QIANXUN_CLAUDE_PERMISSION_MODE:bypassPermissions}
+    context-window: ${QIANXUN_CLAUDE_CONTEXT_WINDOW:200000}
+    # false = 允许 MCP 工具（不再强制写入 no_mcp 哨兵）
+    append-no-mcp: ${QIANXUN_CLAUDE_APPEND_NO_MCP:false}
 
-  # Hermes Agent：OpenAI 兼容 /v1/chat/completions（默认指向 docker-compose 启动的 hermes-agent）
+  # 旧 Hermes 运行器已停用，保留键以免残留环境变量报未知属性
   hermes:
-    enabled: ${QIANXUN_HERMES_ENABLED:true}
-    base-url: ${QIANXUN_HERMES_BASE_URL:http://app-container-master:8642/v1}
-    # 与 hermes/data/.env 中 API_SERVER_KEY 保持一致；本地默认值仅用于开发联调
-    api-key: ${HERMES_API_KEY:12345678}
-    # Hermes API server 通告的 model 名（默认 profile 即 hermes-agent）；
-    # 真正调用的下游模型/Provider 由 hermes/config.yaml 决定（当前为 kimi-coding-cn / kimi-k2.5）
-    chat-model: ${QIANXUN_HERMES_CHAT_MODEL:hermes-agent}
-    # 未启用 Hermes 时，是否与第三方 OpenAI 兼容网关配合，用 agent_skill 作为 model
-    use-skill-as-model: ${QIANXUN_HERMES_USE_SKILL_AS_MODEL:false}
-    # 启用 Hermes 且 NLU 命中场景的 agent_skill 非空时，流式请求是否用其覆盖 chat-model（技能路由）
-    route-intent-skill: ${QIANXUN_HERMES_ROUTE_INTENT_SKILL:true}
-    nlu:
-      # 在流式聊天前先做一次非流式意图识别与槽位抽取，并通过 SSE event:analysis 下发给前端
-      enabled: ${QIANXUN_HERMES_NLU_ENABLED:true}
-      model: ${QIANXUN_HERMES_NLU_MODEL:}
-      temperature: ${QIANXUN_HERMES_NLU_TEMPERATURE:0.0}
-      system-prompt: ${QIANXUN_HERMES_NLU_SYSTEM_PROMPT:}
+    enabled: ${QIANXUN_HERMES_ENABLED:false}
+    base-url: ${QIANXUN_HERMES_BASE_URL:}
+    api-key: ${HERMES_API_KEY:}
+    chat-model: ${QIANXUN_HERMES_CHAT_MODEL:}
+    admin-base-url: ${QIANXUN_HERMES_ADMIN_BASE_URL:}
+    dashboard-username: ${QIANXUN_HERMES_DASHBOARD_USERNAME:}
+    dashboard-password: ${QIANXUN_HERMES_DASHBOARD_PASSWORD:}
+    dashboard-auth-provider: ${QIANXUN_HERMES_DASHBOARD_AUTH_PROVIDER:basic}
+    multiplex-profiles: ${QIANXUN_HERMES_MULTIPLEX_PROFILES:false}
+
+  minio:
+    endpoint: ${MINIO_ENDPOINT:http://minio:9000}
+    access-key: ${MINIO_ACCESS_KEY:${MINIO_ROOT_USER:qianxun}}
+    secret-key: ${MINIO_SECRET_KEY:${MINIO_ROOT_PASSWORD:qianxun-minio-dev}}
+    bucket: ${MINIO_BUCKET:qianxun}
+    # Claude Code 访问公开下载链接用的后端地址（容器内服务名）
+    public-base-url: ${QIANXUN_FILE_PUBLIC_BASE_URL:http://qianxun-backend:8080}
+    max-file-size-mb: ${QIANXUN_UPLOAD_MAX_MB:200}
 
 management:
   health:
@@ -60,10 +88,25 @@ management:
   endpoints:
     web:
       base-path: /
+      exposure:
+        include: health,prometheus,metrics
   endpoint:
     health:
       enabled: true
       show-details: always
+    prometheus:
+      enabled: true
+  metrics:
+    tags:
+      application: qianxun-server
+
+springdoc:
+  api-docs:
+    path: /QianXunService/v3/api-docs
+  swagger-ui:
+    path: /QianXunService/swagger-ui.html
+    tags-sorter: alpha
+    operations-sorter: alpha
 
 tidb:
   datasource:

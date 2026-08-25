@@ -1,6 +1,7 @@
 package com.qianxun.web.interceptor;
 
 import com.qianxun.context.UserContext;
+import com.qianxun.security.AuthRequestAttributes;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.lang.NonNull;
@@ -28,6 +29,9 @@ public class UserContextInterceptor implements HandlerInterceptor {
             @NonNull HttpServletResponse response,
             @NonNull Object handler
     ) {
+        if (Boolean.TRUE.equals(request.getAttribute(AuthRequestAttributes.FROM_JWT))) {
+            return true;
+        }
         String userId      = decode(request.getHeader(UserContext.HEADER_USER_ID));
         String userName    = decode(request.getHeader(UserContext.HEADER_USER_NAME));
         String displayName = decode(request.getHeader(UserContext.HEADER_USER_DISPLAY_NAME));
@@ -47,7 +51,9 @@ public class UserContextInterceptor implements HandlerInterceptor {
 
     /** URL-decode header value；null 或空值直接返回原值（由 UserContext 处理默认值）。 */
     private static String decode(String value) {
-        if (value == null || value.isEmpty()) return value;
+        if (value == null || value.isEmpty()) {
+            return value;
+        }
         try {
             return URLDecoder.decode(value, StandardCharsets.UTF_8);
         } catch (IllegalArgumentException e) {

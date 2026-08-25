@@ -1,0 +1,50 @@
+# LiteLLM Proxy：把 Claude Agent SDK 的 Anthropic Messages 请求
+# 转发给任意 OpenAI Compatible 上游（/v1/chat/completions）。
+#
+# 较新 LiteLLM 会对 openai/ + 自定义 api_base 把 /v1/messages 改走
+# /v1/responses。内网 vLLM / 百炼 compatible-mode 只稳支持
+# chat/completions；vLLM Responses API 还会因缺少 chat_template_kwargs 直接 500。
+# 因此：supports_reasoning: false + 强制 messages/responses 都桥到 completions。
+
+model_list:
+  - model_name: openai-default
+    litellm_params: &openai_upstream
+      model: os.environ/LITELLM_UPSTREAM_MODEL
+      api_base: os.environ/OPENAI_UPSTREAM_BASE_URL
+      api_key: os.environ/OPENAI_UPSTREAM_API_KEY
+      drop_params: true
+      # /responses → /chat/completions，避免把请求原样转发到上游 /v1/responses
+      use_chat_completions_api: true
+    model_info: &no_reasoning
+      supports_reasoning: false
+
+  - model_name: openai-compat
+    litellm_params:
+      <<: *openai_upstream
+    model_info:
+      <<: *no_reasoning
+
+  # 内网常见模型码：前端/注册表可能把这些名字传给 SDK
+  - model_name: DeepseekV4Flash
+    litellm_params:
+      <<: *openai_upstream
+    model_info:
+      <<: *no_reasoning
+
+  - model_name: DeepSeek-V4-Flash
+    litellm_params:
+      <<: *openai_upstream
+    model_info:
+      <<: *no_reasoning
+
+litellm_settings:
+  drop_params: true
+  modify_params: true
+  # /v1/messages（Anthropic）走 chat/completions，而不是 Responses API
+  use_chat_completions_url_for_anthropic_messages: true
+
+# 内网不挂 Postgres。一旦设置 master_key，请求里的 key 若不完全等于它，
+# LiteLLM 会当虚拟密钥去查库 → No connected db。
+# Claude SDK 仍可带 ANTHROPIC_API_KEY（给 SDK 自己用），LiteLLM 不再校验。
+general_settings:
+  allow_requests_on_db_unavailable: true

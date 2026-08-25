@@ -6,6 +6,7 @@ public record UpsertDataFileRequest(
         String date,
         String kind,
         String detailText,
-        String detailJson
+        String detailJson,
+        String folderPath
 ) {}
 

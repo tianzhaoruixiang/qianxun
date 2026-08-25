@@ -1,7 +1,7 @@
 package com.qianxun.web.dto;
 
 /**
- * 智能体注册表 API 返回（含可选系统提示模板，供编辑表单使用）。
+ * 智能体注册表 API 返回。
  */
 public record AgentRegistryResponse(
         String id,
@@ -11,8 +11,12 @@ public record AgentRegistryResponse(
         String description,
         String icon,
         String modelCode,
-        String promptTemplate,
+        String welcomeTitle,
+        String welcomeIntro,
+        String presetChat1,
+        String presetChat2,
+        String presetChat3,
+        String hermesProfile,
         int priority,
         boolean enabled
 ) {}
-

@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
-# 千寻 · 一键验证：覆盖 docker 状态 / Doris / Hermes / 后端 / 前端 / SSE 端到端
+# 千寻 · 一键验证：覆盖 docker 状态 / Claude Code / 后端 / 前端 / SSE 端到端
 set -uo pipefail
 
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "${HERE}/.."
+
+# 与 up.sh 一致：openai 模式时覆盖 ANTHROPIC_* 指向 LiteLLM
+# shellcheck source=claude-upstream-env.sh
+source "${HERE}/claude-upstream-env.sh"
 
 # 从 .env 提取需要的变量（不 source，避免值里含空格的行被 shell 解析）
 api_body() {
@@ -19,10 +23,13 @@ read_env() {
   echo "${v:-$def}"
 }
 BACKEND_PORT=$(read_env QIANXUN_BACKEND_PORT 8080)
-FRONTEND_PORT=$(read_env QIANXUN_FRONTEND_PORT 5173)
-HERMES_PORT=$(read_env HERMES_API_PORT 8642)
+FRONTEND_PORT=$(read_env QIANXUN_FRONTEND_PORT 80)
+CLAUDE_PORT=$(read_env CLAUDE_CODE_PORT 8642)
+LITELLM_PORT=$(read_env LITELLM_PORT 4001)
+UPSTREAM_MODE=$(read_env CLAUDE_UPSTREAM_MODE anthropic)
 DORIS_HTTP=$(read_env DORIS_FE_HTTP_PORT 8030)
-TOKEN=$(read_env API_SERVER_KEY qianxun-local-dev-key)
+MINIO_API=$(read_env MINIO_API_PORT 9000)
+GATEWAY_KEY=$(read_env CLAUDE_GATEWAY_KEY "")
 SSE_TIMEOUT=$(read_env QIANXUN_VERIFY_SSE_TIMEOUT 60)
 
 pass=0; fail=0
@@ -69,31 +76,47 @@ wait_port() {
   done
   echo "  ⚠ ${name} 90s 内未可达，继续验证..."
 }
-wait_port "Doris FE"  127.0.0.1 "${DORIS_HTTP}"    "/api/health"   "qianxun-doris-fe"
-wait_port "Hermes"    127.0.0.1 "${HERMES_PORT}"   "/health"       "qianxun-hermes-agent"
+wait_port "MinIO"     127.0.0.1 "${MINIO_API}"     "/minio/health/live" "qianxun-minio"
+if docker inspect qianxun-doris-fe >/dev/null 2>&1; then
+  wait_port "Doris FE"  127.0.0.1 "${DORIS_HTTP}"    "/api/health"   "qianxun-doris-fe"
+fi
+if docker inspect qianxun-litellm >/dev/null 2>&1; then
+  wait_port "LiteLLM" 127.0.0.1 "${LITELLM_PORT}" "/health/liveliness" "qianxun-litellm"
+fi
+wait_port "Claude Code" 127.0.0.1 "${CLAUDE_PORT}" "/health" "qianxun-claude-code"
 wait_port "后端"      127.0.0.1 "${BACKEND_PORT}"  "/QianXunService/sessions/list" "qianxun-backend"
 wait_port "前端"      127.0.0.1 "${FRONTEND_PORT}" "/"             "qianxun-frontend"
 
 echo
 echo "==> 服务健康"
-check "Doris FE /api/health"  curl -fsS --max-time 8 "http://127.0.0.1:${DORIS_HTTP}/api/health"
-check "Hermes /health"        curl -fsS --max-time 8 "http://127.0.0.1:${HERMES_PORT}/health"
-check "Hermes /v1/models"     curl -fsS --max-time 8 -H "Authorization: Bearer ${TOKEN}" "http://127.0.0.1:${HERMES_PORT}/v1/models"
+check "MinIO /minio/health/live" curl -fsS --max-time 8 "http://127.0.0.1:${MINIO_API}/minio/health/live"
+DATA_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+HOST_S3FS_EXPECT="${HOST_S3FS:-$(read_env HOST_S3FS 1)}"
+if [ "${HOST_S3FS_EXPECT}" = "1" ]; then
+  check "宿主 ./data/claudecode 为 s3fs" sh -c "findmnt -n '${DATA_ROOT}/data/claudecode' | grep -qiE 's3fs|fuse'"
+  check "Claude Code /opt/data 为 MinIO(宿主 s3fs)" docker exec qianxun-claude-code sh -c "awk '\$2==\"/opt/data\" && \$1 ~ /s3fs|fuse/ {found=1} END{exit found?0:1}' /proc/mounts"
+else
+  echo "  · Claude Code /opt/data 为本地目录（HOST_S3FS=${HOST_S3FS_EXPECT}；用户上传仍走 MinIO）"
+fi
+if docker inspect qianxun-doris-fe >/dev/null 2>&1; then
+  check "Doris FE /api/health"  curl -fsS --max-time 8 "http://127.0.0.1:${DORIS_HTTP}/api/health"
+fi
+if docker inspect qianxun-litellm >/dev/null 2>&1; then
+  check "LiteLLM /health/liveliness" curl -fsS --max-time 8 "http://127.0.0.1:${LITELLM_PORT}/health/liveliness"
+  echo "  · CLAUDE_UPSTREAM_MODE=${UPSTREAM_MODE}（openai 时 sidecar 经 LiteLLM）"
+fi
+check "Claude Code /health"   curl -fsS --max-time 8 "http://127.0.0.1:${CLAUDE_PORT}/health"
+if [ -n "${GATEWAY_KEY}" ]; then
+  check "Claude Code /v1/models" curl -fsS --max-time 8 -H "Authorization: Bearer ${GATEWAY_KEY}" "http://127.0.0.1:${CLAUDE_PORT}/v1/models"
+else
+  check "Claude Code /v1/models" curl -fsS --max-time 8 "http://127.0.0.1:${CLAUDE_PORT}/v1/models"
+fi
 check "后端 /QianXunService/sessions/list"    curl -fsS --max-time 8 -X POST -H 'Content-Type: application/json' -d "$(api_body '{}')" "http://127.0.0.1:${BACKEND_PORT}/QianXunService/sessions/list"
 check "前端首页 200"           curl -fsS --max-time 8 -o /dev/null "http://127.0.0.1:${FRONTEND_PORT}/"
-check "前端→后端 反向代理"      curl -fsS --max-time 8 -X POST -H 'Content-Type: application/json' -d "$(api_body '{"enabledOnly":true}')" "http://127.0.0.1:${FRONTEND_PORT}/QianXunService/intent-scenarios/list"
+check "前端→后端 反向代理"      curl -fsS --max-time 8 -X POST -H 'Content-Type: application/json' -d "$(api_body '{}')" "http://127.0.0.1:${FRONTEND_PORT}/QianXunService/sessions/list"
 
 echo
-echo "==> 默认意图场景（应该至少包含 org_research / person_research / general）"
-scenario_json=$(curl -sS --max-time 8 -X POST -H 'Content-Type: application/json' -d "$(api_body '{"enabledOnly":true}')" "http://127.0.0.1:${BACKEND_PORT}/QianXunService/intent-scenarios/list" 2>&1)
-if echo "${scenario_json}" | python3 -c "import sys,json; r=json.load(sys.stdin); d=r.get('data', []); print('  共', len(d), '个场景:', [x['code'] for x in d])" 2>/dev/null; then
-  :
-else
-  echo "  ✗ 无法获取场景列表（HTTP 响应：$(echo "${scenario_json}" | head -c 120)）"
-fi
-
-echo
-echo "==> 端到端 SSE 流式聊天（最多 ${SSE_TIMEOUT}s，看到 event:analysis / event:token 即视为通过）"
+echo "==> 端到端 SSE 流式聊天（最多 ${SSE_TIMEOUT}s，看到 event:started / event:token 即视为通过）"
 SID=$(curl -sS --max-time 10 -X POST "http://127.0.0.1:${BACKEND_PORT}/QianXunService/sessions/create" \
   -H 'Content-Type: application/json' -d "$(api_body '{}')" \
   | python3 -c "import sys,json; d=json.load(sys.stdin).get('data',{}); print(d.get('id',''))" 2>/dev/null || true)
@@ -108,18 +131,12 @@ else
     --max-time "${SSE_TIMEOUT}" -o /tmp/qx-sse.out 2>/dev/null || true
   echo "  -- 接收到的 SSE 事件类型："
   grep -E '^event:' /tmp/qx-sse.out | sort -u | sed 's/^/      /'
-  echo "  -- analysis 事件："
-  grep -A1 '^event:analysis' /tmp/qx-sse.out | sed 's/^/      /' | head -2
-
-  HERMES_ENABLED=$(read_env QIANXUN_HERMES_ENABLED true)
-  if grep -q '^event:analysis' /tmp/qx-sse.out; then
-    echo "  ✓ NLU analysis 事件命中"
+  if grep -qE '^event:(started|token|done)' /tmp/qx-sse.out; then
+    echo "  ✓ 流式事件命中"
     pass=$((pass+1))
-  elif [ "${HERMES_ENABLED}" = "true" ] || [ "${HERMES_ENABLED}" = "1" ]; then
-    echo "  ✗ 未收到 NLU analysis 事件（Hermes 通常 10~60s，可调大 QIANXUN_VERIFY_SSE_TIMEOUT）"
-    fail=$((fail+1))
   else
-    echo "  • Hermes 未启用，跳过 NLU 检查"
+    echo "  ✗ 未收到 started/token/done 事件（可调大 QIANXUN_VERIFY_SSE_TIMEOUT）"
+    fail=$((fail+1))
   fi
 fi
 

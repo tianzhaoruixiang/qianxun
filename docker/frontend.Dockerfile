@@ -1,5 +1,6 @@
 # ───────── Build：Node 20 ─────────
-FROM node:20-alpine AS build
+# 编译阶段用宿主机架构（避免 QEMU 下 Node 崩溃）；产物为静态文件。
+FROM --platform=$BUILDPLATFORM node:20-alpine AS build
 WORKDIR /workspace
 
 COPY fronted/package.json fronted/package-lock.json* ./

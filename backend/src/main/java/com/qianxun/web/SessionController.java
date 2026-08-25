@@ -4,9 +4,11 @@ import com.qianxun.service.QianXunServiceChatSession;
 import com.qianxun.web.dto.ApiRequest;
 import com.qianxun.web.dto.ApiResponse;
 import com.qianxun.web.dto.ChatMessageResponse;
+import com.qianxun.web.dto.ChatSessionListResponse;
 import com.qianxun.web.dto.ChatSessionResponse;
 import com.qianxun.web.dto.CreateSessionRequest;
 import com.qianxun.web.dto.IdRequest;
+import com.qianxun.web.dto.ListSessionsRequest;
 import com.qianxun.web.dto.SessionMessageListRequest;
 import com.qianxun.web.dto.UpdateSessionApiRequest;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -33,9 +35,11 @@ public class SessionController {
     }
 
     @PostMapping("/list")
-    public ApiResponse<List<ChatSessionResponse>> list(@RequestBody(required = false) ApiRequest<Object> request) {
+    public ApiResponse<ChatSessionListResponse> list(
+            @RequestBody(required = false) ApiRequest<ListSessionsRequest> request
+    ) {
         ApiRequestSupport.applyGeneralArgument(request);
-        return ApiResponse.success(chatSessionService.list());
+        return ApiResponse.success(chatSessionService.list(ApiRequestSupport.jsonArg(request)));
     }
 
     @PostMapping("/get")
@@ -48,7 +52,8 @@ public class SessionController {
     public ApiResponse<ChatSessionResponse> update(@RequestBody ApiRequest<UpdateSessionApiRequest> request) {
         ApiRequestSupport.applyGeneralArgument(request);
         UpdateSessionApiRequest arg = ApiRequestSupport.jsonArg(request);
-        return ApiResponse.success(chatSessionService.update(arg.id(), new com.qianxun.web.dto.UpdateSessionRequest(arg.title())));
+        return ApiResponse.success(chatSessionService.update(arg.id(),
+                new com.qianxun.web.dto.UpdateSessionRequest(arg.title(), arg.goal(), arg.clearGoal())));
     }
 
     @PostMapping("/delete")

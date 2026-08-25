@@ -4,7 +4,8 @@
 #
 # 不用 dependency:go-offline：会为“离线全量构建”拉插件生态，国内/弱网下极慢且 -q 无输出像卡死。
 # resolve + resolve-plugins 已覆盖 package 所需依赖与插件，首构建仍可能需数分钟，属正常。
-FROM maven:3.9-eclipse-temurin-21 AS build
+# 编译阶段用宿主机架构（避免 QEMU 下 JVM 崩溃）；产物为平台无关 JAR。
+FROM --platform=$BUILDPLATFORM maven:3.9-eclipse-temurin-21 AS build
 WORKDIR /workspace
 
 ENV MAVEN_OPTS="-Dmaven.wagon.http.retryHandler.count=5"
@@ -19,9 +20,12 @@ RUN mvn -s /root/.m2/settings.xml -B -ntp -Dmaven.test.skip=true -Dassembly.skip
  && JAR_PATH="$(ls target/*.jar | head -n 1)" \
  && cp "${JAR_PATH}" /tmp/app.jar
 
-# ───────── Runtime：Temurin JRE 21 ─────────
+# ───────── Runtime：纯 Temurin JRE 21（智能体运行器在独立 sidecar） ─────────
 FROM eclipse-temurin:21-jre
 WORKDIR /app
 COPY --from=build /tmp/app.jar /app/app.jar
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates wget \
+ && rm -rf /var/lib/apt/lists/*
 EXPOSE 8080
 ENTRYPOINT ["java","-jar","/app/app.jar"]

@@ -7,16 +7,39 @@ public record ChatMessage(
         String sessionId,
         String role,
         String content,
-        /** 仅 assistant 消息有效："quick" 或 "deep" */
+        /** 历史列，已不再写入深度思考模式 */
         String thinkingMode,
-        /** 仅 deep 模式 assistant 消息：<think>...</think> 块的原始内容，已去除标签 */
+        /** 历史列，已不再写入思考过程 */
         String thinkContent,
-        /** assistant：结构化实体 JSON 数组文本（由模型 qianxun-entities 块解析得到），可为 null */
+        /** 历史列，已不再写入实体卡片 */
         String entityCardsJson,
-        /** assistant：意图分析 JSON（与 SSE analysis 事件结构一致），可为 null */
+        /** 历史列，已不再写入意图分析 */
         String intentAnalysisJson,
-        Instant createdAt
+        /** assistant：工具调用时间线 JSON 数组 */
+        String toolCallsJson,
+        /** assistant：上下文占用 JSON */
+        String usageJson,
+        /** assistant：下一步建议 JSON 数组 */
+        String suggestionsJson,
+        Instant createdAt,
+        /** completed | streaming | cancelled | error；旧行为空视为 completed */
+        String status,
+        /** 流式生成 run id；非流式可空 */
+        String runId
 ) {
-    public static final String MODE_QUICK = "quick";
-    public static final String MODE_DEEP  = "deep";
+    public static final String STATUS_COMPLETED = "completed";
+    public static final String STATUS_STREAMING = "streaming";
+    public static final String STATUS_CANCELLED = "cancelled";
+    public static final String STATUS_ERROR = "error";
+
+    public boolean isStreaming() {
+        return STATUS_STREAMING.equalsIgnoreCase(normalizedStatus());
+    }
+
+    public String normalizedStatus() {
+        if (status == null || status.isBlank()) {
+            return STATUS_COMPLETED;
+        }
+        return status.trim();
+    }
 }

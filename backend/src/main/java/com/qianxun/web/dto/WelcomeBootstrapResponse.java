@@ -14,5 +14,8 @@ public record WelcomeBootstrapResponse(
         String portraitSeriesALabel,
         String portraitSeriesBLabel,
         List<SuggestedQuestionResponse> suggestedQuestions,
-        Map<String, String> toolDisplayNames
+        Map<String, String> toolDisplayNames,
+        String presetChat1,
+        String presetChat2,
+        String presetChat3
 ) {}

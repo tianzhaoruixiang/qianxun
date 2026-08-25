@@ -10,4 +10,5 @@ docker/.env
 docker/data
 !docker/.env.example
 docker/images**
+docker/image-out/
 

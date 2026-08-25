@@ -23,7 +23,15 @@ public class AgentRegistryRepository {
             rs.getString("description"),
             rs.getString("icon"),
             rs.getString("model_code"),
-            rs.getString("prompt_template"),
+            emptyIfNull(rs.getString("welcome_title")),
+            emptyIfNull(rs.getString("welcome_intro")),
+            emptyIfNull(rs.getString("preset_chat_1")),
+            emptyIfNull(rs.getString("preset_chat_2")),
+            emptyIfNull(rs.getString("preset_chat_3")),
+            emptyIfNull(rs.getString("api_base_url")),
+            emptyIfNull(rs.getString("upstream_model")),
+            emptyIfNull(rs.getString("api_key")),
+            emptyIfNull(rs.getString("hermes_profile")),
             rs.getInt("priority"),
             rs.getBoolean("enabled"),
             toInstant(rs.getTimestamp("created_at")),
@@ -60,6 +68,18 @@ public class AgentRegistryRepository {
         return rows.stream().findFirst();
     }
 
+    public Optional<AgentRegistryItem> findByHermesProfile(String hermesProfile) {
+        if (hermesProfile == null || hermesProfile.isBlank()) {
+            return Optional.empty();
+        }
+        List<AgentRegistryItem> rows = jdbc.query(
+                "SELECT * FROM " + table + " WHERE LOWER(`hermes_profile`) = LOWER(?) LIMIT 1",
+                ROW_MAPPER,
+                hermesProfile.trim()
+        );
+        return rows.stream().findFirst();
+    }
+
     public long count() {
         Long n = jdbc.queryForObject("SELECT COUNT(*) FROM " + table, Long.class);
         return n == null ? 0 : n;
@@ -67,24 +87,39 @@ public class AgentRegistryRepository {
 
     public void insert(AgentRegistryItem item) {
         jdbc.update(
-                "INSERT INTO " + table + " (`id`,`code`,`name`,`category`,`description`,`icon`,`model_code`,`prompt_template`,`priority`,`enabled`,`created_at`,`updated_at`) "
-                        + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO " + table + " (`id`,`code`,`name`,`category`,`description`,`icon`,`model_code`,`welcome_title`,`welcome_intro`,`preset_chat_1`,`preset_chat_2`,`preset_chat_3`,`api_base_url`,`upstream_model`,`api_key`,`hermes_profile`,`priority`,`enabled`,`created_at`,`updated_at`) "
+                        + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 item.id(), item.code(), item.name(), item.category(), item.description(),
-                item.icon(), item.modelCode(), item.promptTemplate(), item.priority(), item.enabled(),
+                item.icon(), item.modelCode(),
+                item.welcomeTitle(), item.welcomeIntro(),
+                item.presetChat1(), item.presetChat2(), item.presetChat3(),
+                item.apiBaseUrl(), item.upstreamModel(), item.apiKey(), item.hermesProfile(),
+                item.priority(), item.enabled(),
                 Timestamp.from(item.createdAt()), Timestamp.from(item.updatedAt())
         );
     }
 
     public void updateByCode(AgentRegistryItem item) {
         jdbc.update(
-                "UPDATE " + table + " SET `name`=?,`category`=?,`description`=?,`icon`=?,`model_code`=?,`prompt_template`=?,`priority`=?,`enabled`=?,`updated_at`=? WHERE `code`=?",
+                "UPDATE " + table + " SET `name`=?,`category`=?,`description`=?,`icon`=?,`model_code`=?,`welcome_title`=?,`welcome_intro`=?,`preset_chat_1`=?,`preset_chat_2`=?,`preset_chat_3`=?,`api_base_url`=?,`upstream_model`=?,`api_key`=?,`hermes_profile`=?,`priority`=?,`enabled`=?,`updated_at`=? WHERE `code`=?",
                 item.name(), item.category(), item.description(), item.icon(), item.modelCode(),
-                item.promptTemplate(), item.priority(), item.enabled(), Timestamp.from(item.updatedAt()), item.code()
+                item.welcomeTitle(), item.welcomeIntro(),
+                item.presetChat1(), item.presetChat2(), item.presetChat3(),
+                item.apiBaseUrl(), item.upstreamModel(), item.apiKey(), item.hermesProfile(),
+                item.priority(), item.enabled(), Timestamp.from(item.updatedAt()), item.code()
         );
+    }
+
+    /** @return 删除的行数，0 表示不存在该编码 */
+    public int deleteByCode(String code) {
+        return jdbc.update("DELETE FROM " + table + " WHERE `code` = ?", code);
     }
 
     private static Instant toInstant(Timestamp ts) {
         return ts == null ? Instant.EPOCH : ts.toInstant();
     }
-}
 
+    private static String emptyIfNull(String s) {
+        return s == null ? "" : s;
+    }
+}

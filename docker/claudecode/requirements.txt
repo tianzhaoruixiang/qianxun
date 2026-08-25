@@ -1,0 +1,13 @@
+# AIO 基座已有 pandas / numpy / openpyxl / matplotlib / scipy / Pillow / requests 等。
+# 这里只补千寻办公智能体常用、基座没有的包。
+python-docx
+python-pptx
+scikit-learn
+xlsxwriter
+reportlab
+pypdf
+pdfplumber
+duckdb
+pyarrow
+tabulate
+pymysql

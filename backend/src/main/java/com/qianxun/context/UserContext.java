@@ -1,9 +1,11 @@
 package com.qianxun.context;
 
+import com.qianxun.security.UserRoles;
+
 /**
  * 请求级用户上下文（ThreadLocal）。
- * 由 UserContextInterceptor 在请求开始时设置，请求结束时清除。
- * 用户信息完全来自外部系统通过请求头传入，本系统不存储用户数据。
+ * 由 JwtAuthenticationFilter / UserContextInterceptor 在请求开始时设置，请求结束时清除。
+ * 账号持久化在 TiDB {@code app_user}；JWT 与请求头只携带当前请求身份。
  * SSE 场景下，SSE 工作线程与请求线程不同，必须在 Controller 层提前捕获 userId 后显式传递。
  */
 public final class UserContext {
@@ -20,6 +22,7 @@ public final class UserContext {
     private static final ThreadLocal<String> USER_ID_HOLDER      = new ThreadLocal<>();
     private static final ThreadLocal<String> USER_NAME_HOLDER    = new ThreadLocal<>();
     private static final ThreadLocal<String> DISPLAY_NAME_HOLDER = new ThreadLocal<>();
+    private static final ThreadLocal<String> ROLE_HOLDER         = new ThreadLocal<>();
 
     private UserContext() {}
 
@@ -35,16 +38,43 @@ public final class UserContext {
 
     public static String getCurrentDisplayName() {
         String display = DISPLAY_NAME_HOLDER.get();
-        if (display != null && !display.isBlank()) return display;
+        if (display != null && !display.isBlank()) {
+            return display;
+        }
         String name = getCurrentUserName();
         return name.equals(DEFAULT_USER_NAME) ? DEFAULT_DISPLAY : name;
     }
 
-    /** 仅供 UserContextInterceptor 调用 */
+    public static String getCurrentRole() {
+        String role = ROLE_HOLDER.get();
+        if (role != null && !role.isBlank()) {
+            return UserRoles.normalize(role);
+        }
+        if (DEFAULT_USER_ID.equals(getCurrentUserId())
+                || DEFAULT_USER_NAME.equalsIgnoreCase(getCurrentUserName())) {
+            return UserRoles.ADMIN;
+        }
+        return UserRoles.FUNCTIONAL;
+    }
+
+    public static boolean isAdmin() {
+        return UserRoles.isAdmin(getCurrentRole());
+    }
+
+    /** 仅供鉴权过滤器 / UserContextInterceptor 调用 */
     public static void set(String userId, String userName, String displayName) {
+        set(userId, userName, displayName, null);
+    }
+
+    public static void set(String userId, String userName, String displayName, String role) {
         USER_ID_HOLDER.set(userId != null ? userId.trim() : DEFAULT_USER_ID);
         USER_NAME_HOLDER.set(userName != null ? userName.trim() : DEFAULT_USER_NAME);
         DISPLAY_NAME_HOLDER.set(displayName != null ? displayName.trim() : null);
+        if (role != null && !role.isBlank()) {
+            ROLE_HOLDER.set(role.trim());
+        } else {
+            ROLE_HOLDER.remove();
+        }
     }
 
     /** 仅供 UserContextInterceptor 调用 */
@@ -52,5 +82,6 @@ public final class UserContext {
         USER_ID_HOLDER.remove();
         USER_NAME_HOLDER.remove();
         DISPLAY_NAME_HOLDER.remove();
+        ROLE_HOLDER.remove();
     }
 }

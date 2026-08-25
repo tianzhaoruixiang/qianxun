@@ -1,0 +1,15 @@
+package com.qianxun.web.dto;
+
+import java.util.List;
+import java.util.Map;
+
+public record McpServerResponse(
+        String name,
+        String command,
+        List<String> args,
+        Map<String, String> env,
+        boolean enabled,
+        String description,
+        String transport,
+        String url
+) {}

@@ -111,12 +111,10 @@ public class QianXunServiceActivityLog {
     private static ActivityLogResponse toResponse(ChatActivityLog l) {
         return new ActivityLogResponse(
                 l.id(), l.sessionId(), l.userMessageId(), l.assistantMessageId(),
-                l.userContent(), l.nluIntent(), l.nluScenarioCode(), l.nluScenarioName(),
-                l.nluAgentSkill(), l.nluConfidence(), l.nluSlots(), l.nluMissingSlots(),
-                l.nluReasoning(), l.llmEndpoint(), l.llmModel(),
+                l.userContent(), l.llmEndpoint(), l.llmModel(),
                 l.llmRequestJson(), l.llmResponseText(),
                 l.status(), l.errorMessage(),
-                l.nluDurationMs(), l.llmDurationMs(), l.totalDurationMs(),
+                l.llmDurationMs(), l.totalDurationMs(),
                 l.createdAt()
         );
     }

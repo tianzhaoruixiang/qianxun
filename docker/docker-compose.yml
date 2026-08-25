@@ -1,32 +1,24 @@
-# 千寻 · 一键编排：TiDB + Hermes Agent (Kimi) + 千寻后端 + 千寻前端
-# 入口：cd docker && ./bin/up.sh
-# 关停：./bin/down.sh        # 仅关停  /  ./bin/down.sh -v 同时清理数据卷
-# 验证：./bin/verify.sh
-#
-# 所有可调项集中在同目录 .env（参考 .env.example）
-# 持久化数据目录（bind mount）：./data/
-#   ├── tidb/
-#   └── hermes/
-
 name: qianxun
 
 services:
-  # ─────────────────────────────── TiDB ───────────────────────────────
   tidb:
-    image: pingcap/tidb:${TIDB_TAG:-v7.5.3}
+    image: pingcap/tidb:v7.5.3
     container_name: qianxun-tidb
+    # 镜像 ENTRYPOINT 已是 /tidb-server。command 只能写参数，不能再写二进制名：
+    # Go flag 在第一个非选项参数处停止解析，否则 --path 不生效，数据落到容器内 /tmp/tidb，
+    # docker compose down / up 重建容器后库表会空。日志级别标志是 -L（没有 --log-level）。
     command:
-      - /tidb-server
-      - --store=unistore
-      - --path=/data/tidb
-      - --host=0.0.0.0
-      - --advertise-address=tidb
-      - --status=10080
-      - --log-level=warn
+      - -store=unistore
+      - -path=/data/tidb
+      - -temp-dir=/data/tidb/tmp
+      - -host=0.0.0.0
+      - -advertise-address=tidb
+      - -status=10080
+      - -L=warn
     restart: unless-stopped
     ports:
-      - "${TIDB_PORT:-4000}:4000"
-      - "${TIDB_STATUS_PORT:-10080}:10080"
+      - "${TIDB_PORT}:4000"
+      - "${TIDB_STATUS_PORT}:10080"
     volumes:
       - ./data/tidb:/data/tidb
     healthcheck:
@@ -38,54 +30,156 @@ services:
     networks:
       - qianxun_net
 
-  # ─────────────────────────── Hermes Agent ───────────────────────────
-  hermes-agent:
-    image: ${HERMES_IMAGES:-nousresearch/hermes-agent:latest}
-    platform: linux/arm64
-    container_name: qianxun-hermes-agent
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    container_name: qianxun-minio
     restart: unless-stopped
-    command: gateway run
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    command: server /data --console-address ":9001"
     environment:
-      # OpenAI 兼容 API server（必须显式开启 + 绑定到容器 0.0.0.0）
-      - API_SERVER_ENABLED=true
-      - API_SERVER_HOST=0.0.0.0
-      - API_SERVER_PORT=8642
-      - API_SERVER_KEY=${API_SERVER_KEY:-qianxun-local-dev-key}
-      - GATEWAY_ALLOW_ALL_USERS=true
-      # OpenAI/Kimi 双通道统一指向 Moonshot，避免 provider 切换时路由到错误端点
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-${KIMI_API_KEY:-EMPTY}}
-      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-${KIMI_BASE_URL:-https://api.moonshot.cn/v1}}
-      - OPENAI_MODEL=${OPENAI_MODEL:-${KIMI_MODEL:-kimi-k2-turbo-preview}}
-      # Kimi provider（Hermes 原生支持）
-      - KIMI_API_KEY=${KIMI_API_KEY:-EMPTY}
-      - KIMI_BASE_URL=${KIMI_BASE_URL:-https://api.moonshot.cn/v1}
-      - KIMI_MODEL=${KIMI_MODEL:-kimi-k2-turbo-preview}
-      # Tavily：Hermes 的 web_search / web_extract 等（与 ~/.hermes 文档一致，可用环境变量注入）
-      - TAVILY_API_KEY=${TAVILY_API_KEY:-}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
     ports:
-      - "${HERMES_API_PORT:-8642}:8642"
+      - "${MINIO_API_PORT}:9000"
+      - "${MINIO_CONSOLE_PORT}:9001"
     volumes:
-      - ./data/hermes:/opt/data
-    shm_size: 1g
+      - ./data/minio:/data
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8642/health', timeout=3)"]
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live"]
       interval: 10s
-      timeout: 8s
-      retries: 30
-      start_period: 30s
-    deploy:
-      resources:
-        limits:
-          memory: ${HERMES_MEM_LIMIT:-4G}
-          cpus: "${HERMES_CPU_LIMIT:-2.0}"
+      timeout: 5s
+      retries: 12
+      start_period: 15s
     networks:
       - qianxun_net
 
-  # ──────────────────────────── 千寻后端 ────────────────────────────
+  minio-init:
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+    container_name: qianxun-minio-init
+    restart: "no"
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_CLAUDE_BUCKET: ${MINIO_CLAUDE_BUCKET}
+      MINIO_UPLOAD_BUCKET: ${MINIO_UPLOAD_BUCKET}
+      HERMES_SEED_DIR: /seed
+      # 默认 0（直接 compose up 且未走 up.sh 时不要清空本地目录）。
+      # ./bin/up.sh 在 HOST_S3FS=1 时会导出 CLAUDE_SEED_MIGRATE=1。
+      HERMES_SEED_MIGRATE: ${CLAUDE_SEED_MIGRATE}
+    volumes:
+      - ./bin/minio-init.sh:/minio-init.sh:ro
+      - ./data/claudecode:/seed
+    entrypoint: ["/bin/sh", "/minio-init.sh"]
+    networks:
+      - qianxun_net
+
+  # LiteLLM：Anthropic Messages ↔ OpenAI Compatible 协议桥（方案 A）
+  litellm:
+    image: ghcr.io/berriai/litellm:main-stable
+    container_name: qianxun-litellm
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - LITELLM_UPSTREAM_MODEL=${LITELLM_UPSTREAM_MODEL}
+      - OPENAI_UPSTREAM_BASE_URL=${OPENAI_UPSTREAM_BASE_URL}
+      - OPENAI_UPSTREAM_API_KEY=${OPENAI_UPSTREAM_API_KEY}
+      - LITELLM_LOG=${LITELLM_LOG}
+      # 与 config.yaml 双保险：Anthropic /v1/messages 不得转发到上游 /v1/responses
+      - LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES=true
+      # 内网：勿走宿主机/镜像自带代理访问容器名或内网网关
+      - HTTP_PROXY=
+      - HTTPS_PROXY=
+      - ALL_PROXY=
+      - http_proxy=
+      - https_proxy=
+      - all_proxy=
+      - NO_PROXY=litellm,claude-code,qianxun-backend,minio,tidb,localhost,127.0.0.1,host.docker.internal
+      - no_proxy=litellm,claude-code,qianxun-backend,minio,tidb,localhost,127.0.0.1,host.docker.internal
+    volumes:
+      - ./litellm/config.yaml:/app/config.yaml:ro
+    command: ["--config", "/app/config.yaml", "--port", "4000", "--host", "0.0.0.0"]
+    ports:
+      # 宿主端口避免与 TiDB 的 4000 冲突；容器内仍是 4000（claude-code → http://litellm:4000）
+      - "${LITELLM_PORT}:4000"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness', timeout=3)\" || exit 1",
+        ]
+      interval: 15s
+      timeout: 8s
+      retries: 20
+      start_period: 60s
+    networks:
+      - qianxun_net
+
+  claude-code:
+    image: qianxun/claude-code:arm64-dev
+    container_name: qianxun-claude-code
+    build:
+      context: ./claudecode
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      litellm:
+        condition: service_healthy
+    # AIO 浏览器 / VNC 需要
+    security_opt:
+      - seccomp:unconfined
+    shm_size: "2gb"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - PORT=${CLAUDE_CODE_PORT}
+      - DATA_DIR=/opt/data
+      # SDK 只认 Anthropic Messages：默认打 LiteLLM（容器内 4000），勿指向厂商 OpenAI /v1
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN}
+      - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL}
+      - CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+      - HTTP_PROXY=
+      - HTTPS_PROXY=
+      - ALL_PROXY=
+      - http_proxy=
+      - https_proxy=
+      - all_proxy=
+      - NO_PROXY=litellm,claude-code,qianxun-backend,minio,tidb,localhost,127.0.0.1,host.docker.internal
+      - no_proxy=litellm,claude-code,qianxun-backend,minio,tidb,localhost,127.0.0.1,host.docker.internal
+      - CLAUDE_GATEWAY_KEY=${CLAUDE_GATEWAY_KEY}
+      - CLAUDE_GATEWAY_ALLOW_INSECURE=${CLAUDE_GATEWAY_ALLOW_INSECURE:-true}
+      - QIANXUN_CLAUDE_MODEL=${QIANXUN_CLAUDE_MODEL}
+      - QIANXUN_CLAUDE_PERMISSION_MODE=${QIANXUN_CLAUDE_PERMISSION_MODE}
+      - QIANXUN_CLAUDE_CONTEXT_WINDOW=${QIANXUN_CLAUDE_CONTEXT_WINDOW}
+      - QIANXUN_CLAUDE_THINKING=${QIANXUN_CLAUDE_THINKING}
+      # AIO 可选组件（内网可设 true 减负载；Chrome 浏览器已在镜像构建时关闭）
+      - DISABLE_JUPYTER=${DISABLE_JUPYTER:-false}
+      - DISABLE_CODE_SERVER=${DISABLE_CODE_SERVER:-false}
+      # AIO 创建 gem 用户后再把数据盘交给它（Claude Code 不能用 root + bypassPermissions）
+      - RUN_HOOK_PRE_SERVICES=mkdir -p /opt/data; chown -R gem:gem /opt/data; chmod -R a+rwX /opt/data; if [ -x /opt/gem/disable-aio-browser.sh ]; then /opt/gem/disable-aio-browser.sh; fi
+    volumes:
+      - ./data/claudecode:/opt/data
+      - ./claudecode/disable-aio-browser.sh:/opt/gem/disable-aio-browser.sh:ro
+    ports:
+      - "${CLAUDE_CODE_PORT}:${CLAUDE_CODE_PORT}"
+      # AIO Dashboard / VNC / Jupyter / MCP（宿主勿占用后端 8080）
+      - "${AIO_SANDBOX_PORT}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:${CLAUDE_CODE_PORT}/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 90s
+    networks:
+      - qianxun_net
+
   qianxun-backend:
-    image: qianxun/backend:${QIANXUN_TAG:-dev}
+    image: qianxun/backend:arm64-dev
     container_name: qianxun-backend
     build:
       context: ..
@@ -94,34 +188,42 @@ services:
     depends_on:
       tidb:
         condition: service_healthy
-      hermes-agent:
-        condition: service_started
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      claude-code:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
-      # TiDB JDBC（容器内通过服务名互访）
-      - TIDB_DB_URL=jdbc:mysql://tidb:4000/qianxun?createDatabaseIfNotExist=true&useUnicode=true&characterEncoding=UTF-8&useSSL=false&rewriteBatchedStatements=true&allowMultiQueries=true
-      - TIDB_USER=${TIDB_USER:-root}
-      - TIDB_PASSWORD=${TIDB_PASSWORD:-}
-      - DORIS_ENABLE=false
-      # Hermes 对接
-      - QIANXUN_HERMES_ENABLED=${QIANXUN_HERMES_ENABLED:-true}
-      - QIANXUN_HERMES_BASE_URL=http://hermes-agent:8642/v1
-      - HERMES_API_KEY=${API_SERVER_KEY:-qianxun-local-dev-key}
-      - QIANXUN_HERMES_CHAT_MODEL=${QIANXUN_HERMES_CHAT_MODEL:-hermes-agent}
-      - QIANXUN_HERMES_NLU_ENABLED=${QIANXUN_HERMES_NLU_ENABLED:-true}
-      # NLU 命中场景后，是否用意图场景的 agent_skill 作为流式 model（Hermes 技能路由）
-      - QIANXUN_HERMES_ROUTE_INTENT_SKILL=${QIANXUN_HERMES_ROUTE_INTENT_SKILL:-true}
-      # 兜底 LLM（可选）
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - QIANXUN_LLM_BASE_URL=${QIANXUN_LLM_BASE_URL:-https://api.openai.com/v1}
-      - QIANXUN_LLM_MODEL=${QIANXUN_LLM_MODEL:-gpt-4o-mini}
-      - QIANXUN_LLM_MOCK=${QIANXUN_LLM_MOCK:-true}
-      - QIANXUN_LLM_MAX_TOKENS=${QIANXUN_LLM_MAX_TOKENS:-16384}
-      - QIANXUN_LLM_STREAM_TIMEOUT_SECONDS=${QIANXUN_LLM_STREAM_TIMEOUT_SECONDS:-3600}
-      - JAVA_TOOL_OPTIONS=${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=75 -XX:+UseG1GC}
+      - TIDB_DB_URL=${TIDB_DB_URL}
+      - TIDB_USER=${TIDB_USER}
+      - TIDB_PASSWORD=${TIDB_PASSWORD}
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT}
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD}
+      - MINIO_BUCKET=${MINIO_UPLOAD_BUCKET}
+      - QIANXUN_FILE_PUBLIC_BASE_URL=${QIANXUN_FILE_PUBLIC_BASE_URL}
+      - QIANXUN_UPLOAD_MAX_MB=${QIANXUN_UPLOAD_MAX_MB}
+      - QIANXUN_CLAUDE_ENABLED=${QIANXUN_CLAUDE_ENABLED}
+      - QIANXUN_CLAUDE_BASE_URL=${QIANXUN_CLAUDE_BASE_URL}
+      - CLAUDE_GATEWAY_KEY=${CLAUDE_GATEWAY_KEY}
+      - QIANXUN_CLAUDE_MODEL=${QIANXUN_CLAUDE_MODEL}
+      - QIANXUN_CLAUDE_PERMISSION_MODE=${QIANXUN_CLAUDE_PERMISSION_MODE}
+      - QIANXUN_CLAUDE_CONTEXT_WINDOW=${QIANXUN_CLAUDE_CONTEXT_WINDOW}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - QIANXUN_LLM_BASE_URL=${QIANXUN_LLM_BASE_URL}
+      - QIANXUN_LLM_MODEL=${QIANXUN_LLM_MODEL}
+      - QIANXUN_LLM_MOCK=${QIANXUN_LLM_MOCK}
+      - QIANXUN_LLM_MAX_TOKENS=${QIANXUN_LLM_MAX_TOKENS}
+      - QIANXUN_LLM_STREAM_TIMEOUT_SECONDS=${QIANXUN_LLM_STREAM_TIMEOUT_SECONDS}
+      - JAVA_TOOL_OPTIONS=${JAVA_TOOL_OPTIONS}
+      - QIANXUN_CORS_ALLOWED_ORIGIN_PATTERNS=${QIANXUN_CORS_ALLOWED_ORIGIN_PATTERNS}
     ports:
-      - "${QIANXUN_BACKEND_PORT:-8080}:8080"
+      - "${QIANXUN_BACKEND_PORT}:8080"
     healthcheck:
-      test: ["CMD-SHELL", "wget --method=POST --header='Content-Type: application/json' --body-data='{\"jsonArg\":{},\"generalArgument\":{\"userId\":\"1\",\"loginName\":\"admin\",\"ip\":\"127.0.0.1\",\"coralKey\":\"\"}}' -qO/dev/null http://127.0.0.1:8080/QianXunService/sessions/list"]
+      test: ["CMD", "wget", "-qO/dev/null", "http://127.0.0.1:8080/QianXunService/auth/health"]
       interval: 5s
       timeout: 5s
       retries: 60
@@ -129,9 +231,8 @@ services:
     networks:
       - qianxun_net
 
-  # ──────────────────────────── 千寻前端 ────────────────────────────
   qianxun-frontend:
-    image: qianxun/frontend:amd64-dev
+    image: qianxun/frontend:arm64-dev
     container_name: qianxun-frontend
     build:
       context: ..
@@ -141,7 +242,7 @@ services:
       qianxun-backend:
         condition: service_started
     ports:
-      - "${QIANXUN_FRONTEND_PORT:-5173}:80"
+      - "${QIANXUN_FRONTEND_PORT}:80"
     healthcheck:
       test: ["CMD", "wget", "-qO/dev/null", "http://127.0.0.1/"]
       interval: 5s
@@ -157,7 +258,6 @@ networks:
     driver: bridge
     ipam:
       config:
-        # 默认网段；如与宿主网络冲突可在 .env 覆盖
-        - subnet: ${DORIS_SUBNET:-172.29.80.0/24}
-          ip_range: ${DORIS_IP_RANGE:-172.29.80.128/25}
-          gateway: ${DORIS_GATEWAY:-172.29.80.1}
+        - subnet: ${QIANXUN_NET_SUBNET}
+          ip_range: ${QIANXUN_NET_IP_RANGE}
+          gateway: ${QIANXUN_NET_GATEWAY}

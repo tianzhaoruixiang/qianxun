@@ -24,6 +24,21 @@ public class UiConfigRepository {
         return list.stream().findFirst().filter(v -> v != null && !v.isBlank());
     }
 
+    public boolean hasKey(String key) {
+        Integer n = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM " + table + " WHERE `config_key` = ?", Integer.class, key);
+        return n != null && n > 0;
+    }
+
+    public String getOrEmpty(String key) {
+        String sql = "SELECT `config_value` FROM " + table + " WHERE `config_key` = ? LIMIT 1";
+        var list = jdbcTemplate.query(sql, (rs, rn) -> rs.getString("config_value"), key);
+        if (list.isEmpty() || list.get(0) == null) {
+            return "";
+        }
+        return list.get(0);
+    }
+
     public long count() {
         Long n = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM " + table, Long.class);
         return n == null ? 0 : n;

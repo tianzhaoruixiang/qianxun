@@ -5,5 +5,6 @@ public record UserResponse(
         String username,
         String displayName,
         String avatarUrl,
-        boolean enabled
+        boolean enabled,
+        String role
 ) {}

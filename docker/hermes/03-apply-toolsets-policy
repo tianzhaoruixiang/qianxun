@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+
+# s6 在网关进程启动前执行，直接修改其实际读取的 /opt/data（s3fs 持久化目录）。
+python3 /opt/qianxun-hermes-policy/apply-toolsets-policy.py \
+  --home /opt/data \
+  --policy /opt/qianxun-hermes-policy/toolsets-policy.yaml

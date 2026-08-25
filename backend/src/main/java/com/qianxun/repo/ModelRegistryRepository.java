@@ -55,6 +55,18 @@ public class ModelRegistryRepository {
         return rows.stream().findFirst();
     }
 
+    public Optional<ModelRegistryItem> findByNameIgnoreCase(String name) {
+        if (name == null || name.isBlank()) {
+            return Optional.empty();
+        }
+        List<ModelRegistryItem> rows = jdbc.query(
+                "SELECT * FROM " + table + " WHERE LOWER(`name`) = LOWER(?) LIMIT 1",
+                ROW_MAPPER,
+                name.trim()
+        );
+        return rows.stream().findFirst();
+    }
+
     public long count() {
         Long n = jdbc.queryForObject("SELECT COUNT(*) FROM " + table, Long.class);
         return n == null ? 0 : n;
