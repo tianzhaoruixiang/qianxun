@@ -53,8 +53,10 @@ qianxun:
     base-url: ${QIANXUN_CLAUDE_BASE_URL:http://claude-code:8642}
     api-key: ${CLAUDE_GATEWAY_KEY:}
     chat-model: ${QIANXUN_CLAUDE_MODEL:qwen3.6-plus}
+    sdk-model: ${QIANXUN_CLAUDE_SDK_MODEL:sonnet}
+    openai-upstream-base-url: ${OPENAI_UPSTREAM_BASE_URL:}
+    openai-upstream-api-key: ${OPENAI_UPSTREAM_API_KEY:}
     permission-mode: ${QIANXUN_CLAUDE_PERMISSION_MODE:bypassPermissions}
-    context-window: ${QIANXUN_CLAUDE_CONTEXT_WINDOW:200000}
     # false = 允许 MCP 工具（不再强制写入 no_mcp 哨兵）
     append-no-mcp: ${QIANXUN_CLAUDE_APPEND_NO_MCP:false}
 

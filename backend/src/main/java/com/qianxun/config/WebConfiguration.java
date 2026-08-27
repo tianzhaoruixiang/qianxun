@@ -53,6 +53,7 @@ public class WebConfiguration implements WebMvcConfigurer {
         ex.setMaxPoolSize(32);
         ex.setQueueCapacity(200);
         ex.setThreadNamePrefix("qianxun-sse-");
+        ex.setDaemon(true);
         ex.initialize();
         return ex;
     }

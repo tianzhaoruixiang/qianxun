@@ -28,15 +28,21 @@ public class QianXunServiceWelcome {
     private final UiConfigRepository uiConfigRepository;
     private final SuggestedQuestionRepository suggestedQuestionRepository;
     private final ToolDisplayNames toolDisplayNames;
+    private final SystemSettingsService systemSettingsService;
+    private final ContextWindowResolver contextWindowResolver;
 
     public QianXunServiceWelcome(
             UiConfigRepository uiConfigRepository,
             SuggestedQuestionRepository suggestedQuestionRepository,
-            ToolDisplayNames toolDisplayNames
+            ToolDisplayNames toolDisplayNames,
+            SystemSettingsService systemSettingsService,
+            ContextWindowResolver contextWindowResolver
     ) {
         this.uiConfigRepository = uiConfigRepository;
         this.suggestedQuestionRepository = suggestedQuestionRepository;
         this.toolDisplayNames = toolDisplayNames;
+        this.systemSettingsService = systemSettingsService;
+        this.contextWindowResolver = contextWindowResolver;
     }
 
     public WelcomeBootstrapResponse bootstrap() {
@@ -53,13 +59,18 @@ public class QianXunServiceWelcome {
 
         Map<String, String> tools = new LinkedHashMap<>(toolDisplayNames.allDisplayNames());
         String[] presets = resolvedPresets(questions.stream().map(SuggestedQuestionResponse::text).toList());
+        String officerPortrait = resolvedOfficerPortrait();
 
         return new WelcomeBootstrapResponse(
                 disclaimer, greeting, capability, recommendLabel,
                 portraitA, portraitB,
                 questions,
                 tools,
-                presets[0], presets[1], presets[2]
+                presets[0], presets[1], presets[2],
+                officerPortrait,
+                systemSettingsService.resolvedSystemName(),
+                systemSettingsService.resolvedClaudeChatModel(),
+                positiveOrNull(contextWindowResolver.resolveRuntimeModelWindow())
         );
     }
 
@@ -72,12 +83,13 @@ public class QianXunServiceWelcome {
                 && WelcomeOfficerPresets.clip(s2).isEmpty()
                 && WelcomeOfficerPresets.clip(s3).isEmpty()) {
             String[] resolved = resolvedPresets(suggestedTexts());
-            return new WelcomePresetsResponse(resolved[0], resolved[1], resolved[2]);
+            return new WelcomePresetsResponse(resolved[0], resolved[1], resolved[2], resolvedOfficerPortrait());
         }
         return new WelcomePresetsResponse(
                 WelcomeOfficerPresets.clip(s1),
                 WelcomeOfficerPresets.clip(s2),
-                WelcomeOfficerPresets.clip(s3)
+                WelcomeOfficerPresets.clip(s3),
+                resolvedOfficerPortrait()
         );
     }
 
@@ -88,10 +100,16 @@ public class QianXunServiceWelcome {
         String p1 = WelcomeOfficerPresets.clip(body == null ? null : body.presetChat1());
         String p2 = WelcomeOfficerPresets.clip(body == null ? null : body.presetChat2());
         String p3 = WelcomeOfficerPresets.clip(body == null ? null : body.presetChat3());
+        String portrait = WelcomeOfficerPresets.clipPortrait(body == null ? null : body.officerPortrait());
         uiConfigRepository.upsert(WelcomeOfficerPresets.KEY_1, p1);
         uiConfigRepository.upsert(WelcomeOfficerPresets.KEY_2, p2);
         uiConfigRepository.upsert(WelcomeOfficerPresets.KEY_3, p3);
-        return new WelcomePresetsResponse(p1, p2, p3);
+        uiConfigRepository.upsert(WelcomeOfficerPresets.KEY_PORTRAIT, portrait);
+        return new WelcomePresetsResponse(p1, p2, p3, portrait);
+    }
+
+    private String resolvedOfficerPortrait() {
+        return WelcomeOfficerPresets.clipPortrait(uiConfigRepository.getOrEmpty(WelcomeOfficerPresets.KEY_PORTRAIT));
     }
 
     private String[] resolvedPresets(List<String> suggested) {
@@ -101,6 +119,10 @@ public class QianXunServiceWelcome {
                 uiConfigRepository.getOrEmpty(WelcomeOfficerPresets.KEY_3),
                 suggested
         );
+    }
+
+    private static Integer positiveOrNull(int window) {
+        return window > 0 ? window : null;
     }
 
     private List<String> suggestedTexts() {

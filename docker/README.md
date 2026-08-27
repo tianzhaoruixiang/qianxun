@@ -13,27 +13,25 @@ Claude Code sidecar  --Anthropic Messages-->  LiteLLM  --OpenAI Compatible-->  �
 ## 目录结构
 
 ```
-docker/
-├── docker-compose.yml      # 全部服务编排
-├── .env                    # 环境变量（开发默认值，包含密钥；已 gitignore）
-├── .env.example            # 模板（无密钥，可入库）
-├── backend.Dockerfile      # 千寻后端：Maven 21 → JRE 21
-├── frontend.Dockerfile     # 千寻前端：Node 20 → nginx alpine
-├── nginx.conf              # 前端 nginx 配置（SSE 友好的反向代理 /QianXunService → 后端）
-├── litellm/
-│   └── config.yaml         # LiteLLM：openai-default → OpenAI Compatible 上游
+仓库根目录
+├── backend/                # 千寻 Java 后端
+├── fronted/                # 千寻前端
 ├── claudecode/             # Claude Agent SDK sidecar（Node + Express）
 │   ├── Dockerfile
 │   ├── package.json
-│   └── src/                # REST 管理面 + POST /v1/agent/stream（NDJSON）
-└── bin/
-    ├── up.sh               # 可选：s3fs 挂载 + 构建 + verify
-    ├── claude-upstream-env.sh  # 可选：up/verify 时覆盖上游 env
-    ├── verify.sh           # 健康检查 + 接口探活 + SSE 端到端
-    ├── down.sh             # 关停容器（保留 TiDB 命名卷，拒绝 -v）
-    ├── destroy-data.sh     # 可选：确认后清空 TiDB（需 --yes）
-    └── logs.sh             # 查看日志（可指定服务）
+│   └── src/
+├── litellm/                # LiteLLM 协议桥配置与回调
+│   ├── config.yaml
+│   └── merge_leading_system.py
+└── docker/                 # 编排与数据（compose 仍在此目录执行）
+    ├── docker-compose.yml
+    ├── .env
+    ├── backend.Dockerfile
+    ├── frontend.Dockerfile
+    └── bin/
 ```
+
+在 `docker/` 下 **`docker compose up -d --build`** 即可起 TiDB / MinIO / LiteLLM / Claude Code sidecar / 后端 / 前端。compose 通过相对路径引用仓库根上的 `../claudecode`、`../litellm`。
 
 ## 服务总览
 
@@ -63,17 +61,20 @@ Claude Code sidecar  --Anthropic Messages-->  LiteLLM:4000  --OpenAI Compatible-
 OPENAI_UPSTREAM_API_KEY=sk-xxx
 OPENAI_UPSTREAM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 LITELLM_UPSTREAM_MODEL=openai/qwen3.6-plus
-LITELLM_MODEL_ALIAS=openai-default
 ANTHROPIC_BASE_URL=http://litellm:4000
 ANTHROPIC_API_KEY=sk-litellm-local
-QIANXUN_CLAUDE_MODEL=openai-default
+ANTHROPIC_MODEL=sonnet
+QIANXUN_CLAUDE_SDK_MODEL=sonnet
+QIANXUN_CLAUDE_MODEL=qwen3.6-plus
 QIANXUN_CLAUDE_THINKING=disabled
 ```
 
 注意：
 - 厂商密钥写在 `OPENAI_UPSTREAM_API_KEY`，**不要**写进 `ANTHROPIC_API_KEY`。
 - `ANTHROPIC_BASE_URL` 必须是 `http://litellm:4000`（容器网），不要写成百炼 `/apps/anthropic`、厂商 `/v1`，也不要写成 `http://127.0.0.1:4001`（容器内 localhost 不是宿主）。
-- `LITELLM_UPSTREAM_MODEL` 必须带 `openai/` 前缀；`QIANXUN_CLAUDE_MODEL` / `ANTHROPIC_MODEL` 用别名 `openai-default`（LiteLLM 另有别名 `DeepseekV4Flash`）。
+- `LITELLM_UPSTREAM_MODEL` 必须带 `openai/` 前缀。`ANTHROPIC_MODEL` / `QIANXUN_CLAUDE_SDK_MODEL` 用 Claude Code 短名（默认 `sonnet`），由 LiteLLM 转到上游。
+- 系统设置可改 **上游 model / Base URL / API Key**（OpenAI Compatible）。未填时回退 `QIANXUN_CLAUDE_MODEL`、`OPENAI_UPSTREAM_BASE_URL`、`OPENAI_UPSTREAM_API_KEY`。不要填网关别名 `openai-default`。
+- 进入对话时后端会按当前选中模型查注册表，并请求上游 `/models` 读取其声明的上下文窗口，再交给 sidecar 做自动压缩。不要设置 `DISABLE_AUTO_COMPACT`。
 
 ### 内网 DeepSeek（OpenAI Compatible）
 
@@ -86,13 +87,14 @@ LITELLM_UPSTREAM_MODEL=openai/DeepseekV4Flash
 OPENAI_UPSTREAM_API_KEY=<内网密钥>
 ANTHROPIC_BASE_URL=http://litellm:4000
 ANTHROPIC_API_KEY=sk-litellm-local
-QIANXUN_CLAUDE_MODEL=openai-default
+ANTHROPIC_MODEL=sonnet
+QIANXUN_CLAUDE_MODEL=DeepseekV4Flash
 QIANXUN_CLAUDE_THINKING=disabled
 ```
 
 改完后 `docker compose up -d litellm claude-code`。
 
-若要 sidecar 直连 Anthropic Messages，把 `ANTHROPIC_BASE_URL` 改成厂商 Messages 地址，并把 `QIANXUN_CLAUDE_MODEL` 改成真实模型名（如 `qwen3.6-plus`）。
+若要 sidecar 直连 Anthropic Messages，把 `ANTHROPIC_BASE_URL` 改成厂商 Messages 地址，并把 `QIANXUN_CLAUDE_SDK_MODEL` / `ANTHROPIC_MODEL` 改成真实模型名。
 
 ## 一键启动
 
@@ -114,7 +116,7 @@ docker compose up -d --build
 | 工作区经 s3fs 进 MinIO（Linux 默认） | ❌ Docker Desktop 无可靠 `/dev/fuse`，设 `HOST_S3FS=0` |
 | 用户上传进 MinIO `qianxun` 桶 | ✅（S3 API，与 s3fs 无关） |
 
-当前默认镜像标签是 **`arm64-dev`**。常见 Windows PC 是 **amd64**，需要换成对应 amd64 标签。
+镜像标签统一为 **`dev`**（不区分 ARM / x86）。本地 `docker compose up --build` 会按当前宿主机架构构建。
 
 Windows 上在 `.env` 设 `HOST_S3FS=0` 再 `docker compose up -d`；工作区落在 `docker/data/claudecode` 本地盘。
 
@@ -163,7 +165,7 @@ Windows 上在 `.env` 设 `HOST_S3FS=0` 再 `docker compose up -d`；工作区�
 | `./data/minio` | minio | `/data` |
 | `./data/claudecode` | claude-code / minio-init seed | `/opt/data`、`/seed` |
 
-配置/脚本类只读挂载（`./bin/minio-init.sh`、`./litellm/config.yaml`、`./claudecode/disable-aio-browser.sh`）仍指向源码树，不属于运行时数据。
+配置/脚本类只读挂载（`./bin/minio-init.sh`、`../litellm/config.yaml`、`../claudecode/disable-aio-browser.sh`）仍指向源码树，不属于运行时数据。
 
 ### TiDB 持久化
 - 数据在宿主 `./data/tidb`（容器内 `-path=/data/tidb`）。`compose down` / `up.sh` **不会**删这个目录。
@@ -198,7 +200,7 @@ cd docker && ./bin/down.sh && ./bin/up.sh
 - `HOST_S3FS=1`（默认）时 `minio-init` 会把旧的本地文件迁入桶再挂载；`down.sh` 会卸掉 FUSE
 
 ### LiteLLM（方案 A）
-- 配置：`docker/litellm/config.yaml`；别名 `openai-default` / `openai-compat` / `DeepseekV4Flash` / `DeepSeek-V4-Flash`。
+- 配置：仓库根目录 `litellm/config.yaml`；SDK 用 `claude-sonnet-4-5` 等 Anthropic 名，LiteLLM 再改写成 `LITELLM_UPSTREAM_MODEL` 或系统设置中的上游 id。
 - Claude sidecar 默认：`ANTHROPIC_BASE_URL=http://litellm:4000`。LiteLLM 内网不挂数据库、不校验 master_key；`ANTHROPIC_API_KEY` 只给 Claude SDK 用。
 - 厂商 OpenAI Compatible key 只进 LiteLLM 的 `OPENAI_UPSTREAM_API_KEY`。
 - **强制 Chat Completions**：`config.yaml` 已设 `use_chat_completions_url_for_anthropic_messages` 与 `use_chat_completions_api`，避免 LiteLLM 把 `/v1/messages` 转到上游 `/v1/responses`（内网 vLLM 会因 `chat_template_kwargs` 500）。改完后需 `docker compose up -d --force-recreate litellm`。

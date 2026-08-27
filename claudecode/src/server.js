@@ -42,8 +42,7 @@ process.env.ANTHROPIC_BASE_URL = resolveAnthropicBaseUrl(process.env.ANTHROPIC_B
 const PORT = Number(process.env.PORT || 8642);
 const GATEWAY_KEY = (process.env.CLAUDE_GATEWAY_KEY || "").trim();
 const ALLOW_INSECURE = String(process.env.CLAUDE_GATEWAY_ALLOW_INSECURE || "").trim().toLowerCase() === "true";
-const MODEL = process.env.QIANXUN_CLAUDE_MODEL || process.env.ANTHROPIC_MODEL || "qwen3.6-plus";
-const CONTEXT_WINDOW = Number(process.env.QIANXUN_CLAUDE_CONTEXT_WINDOW || 200000);
+const MODEL = process.env.QIANXUN_CLAUDE_SDK_MODEL || process.env.ANTHROPIC_MODEL || "sonnet";
 
 if (!GATEWAY_KEY && !ALLOW_INSECURE) {
   console.error("[claude-code] FATAL: 未设置 CLAUDE_GATEWAY_KEY。生产环境必须配置 Bearer 鉴权；"
@@ -113,7 +112,7 @@ app.get("/api/profiles", async (req, res) => {
   if (!userId) {
     return;
   }
-  res.json({ profiles: await listProfiles(userId, MODEL, CONTEXT_WINDOW) });
+  res.json({ profiles: await listProfiles(userId, MODEL) });
 });
 
 app.post("/api/profiles", async (req, res) => {
@@ -384,6 +383,9 @@ app.post("/v1/agent/stream", async (req, res) => {
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders?.();
+  req.setTimeout(0);
+  res.setTimeout(0);
+  req.socket?.setTimeout?.(0);
   const abort = new AbortController();
   const onClientGone = () => {
     if (!res.writableEnded && !abort.signal.aborted) {
@@ -397,6 +399,14 @@ app.post("/v1/agent/stream", async (req, res) => {
       res.write(JSON.stringify(obj) + "\n");
     }
   };
+  // 工具执行可能长时间无 SDK 事件；心跳避免后端 HttpClient / 中间层按空闲掐断 NDJSON
+  const heartbeatMs = 15_000;
+  const heartbeat = setInterval(() => {
+    writeLine({ type: "heartbeat", ts: Date.now() });
+  }, heartbeatMs);
+  if (typeof heartbeat.unref === "function") {
+    heartbeat.unref();
+  }
   const started = Date.now();
   try {
     if (!(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN || "").trim()) {
@@ -404,7 +414,7 @@ app.post("/v1/agent/stream", async (req, res) => {
       res.end();
       return;
     }
-    console.log(`[claude-code] stream start model=${req.body?.model || process.env.QIANXUN_CLAUDE_MODEL} session=${req.body?.sessionId || ""} user=${req.body?.userId || ""} api=${process.env.ANTHROPIC_BASE_URL || ""}`);
+    console.log(`[claude-code] stream start sdkModel=${req.body?.model || process.env.QIANXUN_CLAUDE_SDK_MODEL || process.env.ANTHROPIC_MODEL} upstream=${req.body?.upstreamModel || process.env.QIANXUN_CLAUDE_MODEL || ""} session=${req.body?.sessionId || ""} user=${req.body?.userId || ""} api=${process.env.ANTHROPIC_BASE_URL || ""}`);
     await streamTurn(req.body || {}, writeLine, abort.signal);
     console.log(`[claude-code] stream ok ${Date.now() - started}ms`);
   } catch (ex) {
@@ -414,6 +424,7 @@ app.post("/v1/agent/stream", async (req, res) => {
       writeLine({ type: "error", error: msg });
     }
   } finally {
+    clearInterval(heartbeat);
     res.off?.("close", onClientGone);
     if (!res.writableEnded) {
       res.end();
@@ -421,7 +432,7 @@ app.post("/v1/agent/stream", async (req, res) => {
   }
 });
 
-app.listen(PORT, "0.0.0.0", async () => {
+const server = app.listen(PORT, "0.0.0.0", async () => {
   console.log(`[claude-code] listening on ${PORT} dataDir=${DATA_DIR}`);
   try {
     const n = await migrateAllLegacyClaudeHomes();
@@ -436,3 +447,7 @@ app.listen(PORT, "0.0.0.0", async () => {
     console.warn("[claude-code] legacy migration:", ex?.message || ex);
   }
 });
+server.timeout = 0;
+server.keepAliveTimeout = 0;
+server.headersTimeout = 0;
+server.requestTimeout = 0;

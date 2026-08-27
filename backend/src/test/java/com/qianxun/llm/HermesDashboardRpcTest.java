@@ -190,6 +190,7 @@ class HermesDashboardRpcTest {
         assertThat(tools).hasSize(2);
         assertThat(tools.get(0).functionName()).isEqualTo("web_search");
         assertThat(tools.get(0).status()).isEqualTo("running");
+        assertThat(tools.get(0).argsChunk()).isEqualTo("q");
         assertThat(tools.get(1).status()).isEqualTo("completed");
         assertThat(tools.get(1).argsChunk()).contains("query");
         assertThat(tools.get(1).result()).contains("ok");
@@ -305,6 +306,9 @@ class HermesDashboardRpcTest {
         assertThat(tools.stream().anyMatch(t ->
                 "awaiting".equals(t.status()) && t.details() != null
                         && String.valueOf(t.details().get("summary")).contains("网页搜索"))).isTrue();
+        assertThat(tools.stream().anyMatch(t ->
+                "web_search".equals(t.functionName()) && "running".equals(t.status())
+                        && t.details() != null && "c1".equals(String.valueOf(t.details().get("parentId"))))).isTrue();
 
         socket.handleNode(mapper.readTree("""
                 {"jsonrpc":"2.0","method":"event","params":{"type":"message.complete","session_id":"s1","payload":{"status":"complete","usage":{"prompt":1,"completion":1,"total":2}}}}
@@ -402,7 +406,14 @@ class HermesDashboardRpcTest {
         assertThat(ev.functionName()).isEqualTo("subagent");
         assertThat(ev.status()).isEqualTo("running");
         assertThat(ev.details().get("childToolName")).isEqualTo("write_file");
+        var child = HermesDashboardRpc.toSubagentChildToolEvent("subagent.tool", payload);
+        assertThat(child).isNotNull();
+        assertThat(child.functionName()).isEqualTo("write_file");
+        assertThat(child.status()).isEqualTo("running");
+        assertThat(child.details().get("parentId")).isEqualTo("sa-1");
+        assertThat(child.toolCallId()).startsWith("sa-1:");
         assertThat(HermesDashboardRpc.toSubagentEvent("subagent.text", payload)).isNull();
+        assertThat(HermesDashboardRpc.toSubagentChildToolEvent("subagent.start", payload)).isNull();
     }
 
     @Test

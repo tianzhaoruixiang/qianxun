@@ -18,18 +18,26 @@ class ClaudeCodeChatClientTest {
     }
 
     @Test
-    void buildPrompt_shouldRewriteGoalSlash() {
+    void buildPrompt_shouldPassThroughGoalSlash() {
         ChatDashboardTurn.Plan plan = new ChatDashboardTurn.Plan(
-                "/goal 完成季度复盘", true, "补充：先列提纲", List.of());
+                "/goal 完成季度复盘", true, "【长程目标】完成季度复盘", List.of());
         String prompt = ClaudeCodeChatClient.buildPrompt(plan, "");
-        assertThat(prompt).contains("长程目标").contains("完成季度复盘").contains("先列提纲");
+        assertThat(prompt).isEqualTo("/goal 完成季度复盘");
     }
 
     @Test
-    void buildPrompt_shouldRewriteGoalClear() {
+    void buildPrompt_shouldAppendNonDisplayUserAfterGoal() {
+        ChatDashboardTurn.Plan plan = new ChatDashboardTurn.Plan(
+                "/goal 完成季度复盘", true, "先列提纲", List.of());
+        String prompt = ClaudeCodeChatClient.buildPrompt(plan, "");
+        assertThat(prompt).isEqualTo("/goal 完成季度复盘\n\n先列提纲");
+    }
+
+    @Test
+    void buildPrompt_shouldPassThroughGoalClear() {
         ChatDashboardTurn.Plan plan = new ChatDashboardTurn.Plan(
                 "/goal clear", false, "然后闲聊", List.of());
-        assertThat(ClaudeCodeChatClient.buildPrompt(plan, "")).contains("停止当前长程目标").contains("然后闲聊");
+        assertThat(ClaudeCodeChatClient.buildPrompt(plan, "")).isEqualTo("/goal clear");
     }
 
     @Test

@@ -30,7 +30,7 @@ public record StreamChatRequest(
          */
         String skillName,
         /**
-         * 可选：本轮设定的长程目标；非空则写入会话，并由 Dashboard 原生 {@code /goal} 斜杠命令生效。
+         * 可选：本轮设定的长程目标；非空则写入会话，并下发 Claude Code 原生 {@code /goal &lt;condition&gt;}。
          */
         SessionGoalRequest goal,
         /**

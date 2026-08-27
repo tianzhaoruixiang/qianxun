@@ -60,6 +60,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         String path = stripContextPath(request);
         if (isLoginPath(path, request.getMethod())
                 || isHealthPath(path, request.getMethod())
+                || isBrandPath(path, request.getMethod())
                 || isPublicFileGet(path, request.getMethod())
                 || isOpenApiPath(path)
                 || isWebSocketUpgrade(path, request)) {
@@ -116,6 +117,10 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private static boolean isHealthPath(String path, String method) {
         return "GET".equalsIgnoreCase(method) && "/QianXunService/auth/health".equals(path);
+    }
+
+    private static boolean isBrandPath(String path, String method) {
+        return "POST".equalsIgnoreCase(method) && "/QianXunService/welcome/brand".equals(path);
     }
 
     /** 智能体 / 浏览器通过公开 token 下载用户文档，无需登录。 */

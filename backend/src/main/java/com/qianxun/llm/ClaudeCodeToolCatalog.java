@@ -120,7 +120,12 @@ public final class ClaudeCodeToolCatalog {
         if (e != null) {
             return e;
         }
-        return BY_LOWER.get(raw.toLowerCase(Locale.ROOT));
+        e = BY_LOWER.get(raw.toLowerCase(Locale.ROOT));
+        if (e != null) {
+            return e;
+        }
+        String compact = raw.replace("_", "").toLowerCase(Locale.ROOT);
+        return BY_LOWER.get(compact);
     }
 
     public static String displayName(String toolCode) {

@@ -8,7 +8,8 @@ public record SessionGoalResponse(
         String title,
         String description,
         String steps,
-        String constraints
+        String constraints,
+        Integer stopAfterTurns
 ) {
     public static SessionGoalResponse from(ChatGoalInvocation.Goal goal) {
         if (goal == null || goal.isBlank()) {
@@ -18,7 +19,8 @@ public record SessionGoalResponse(
                 blankToNull(goal.title()),
                 blankToNull(goal.description()),
                 blankToNull(goal.steps()),
-                blankToNull(goal.constraints())
+                blankToNull(goal.constraints()),
+                goal.stopAfterTurns()
         );
     }
 

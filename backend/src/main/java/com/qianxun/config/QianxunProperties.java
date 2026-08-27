@@ -72,8 +72,12 @@ public class QianxunProperties {
         /** 网关 Bearer（可选，对应容器 CLAUDE_GATEWAY_KEY）。 */
         private String apiKey = "";
         private String chatModel = "qwen3.6-plus";
+        /** Claude Agent SDK 侧模型名（须为 Anthropic 形态，经 LiteLLM 别名转发）。 */
+        private String sdkModel = "sonnet";
+        /** LiteLLM 默认上游（系统设置未填时）。 */
+        private String openaiUpstreamBaseUrl = "";
+        private String openaiUpstreamApiKey = "";
         private String permissionMode = "bypassPermissions";
-        private int contextWindow = 200_000;
         /** 为 true 时在 api_server 工具集列表末尾追加 no_mcp 哨兵以禁用 MCP。 */
         private boolean appendNoMcp = false;
         /** 兼容旧配置，网关侧不再读取。 */
@@ -88,10 +92,14 @@ public class QianxunProperties {
         public void setApiKey(String apiKey) { this.apiKey = apiKey; }
         public String getChatModel() { return chatModel; }
         public void setChatModel(String chatModel) { this.chatModel = chatModel; }
+        public String getSdkModel() { return sdkModel; }
+        public void setSdkModel(String sdkModel) { this.sdkModel = sdkModel; }
+        public String getOpenaiUpstreamBaseUrl() { return openaiUpstreamBaseUrl; }
+        public void setOpenaiUpstreamBaseUrl(String openaiUpstreamBaseUrl) { this.openaiUpstreamBaseUrl = openaiUpstreamBaseUrl; }
+        public String getOpenaiUpstreamApiKey() { return openaiUpstreamApiKey; }
+        public void setOpenaiUpstreamApiKey(String openaiUpstreamApiKey) { this.openaiUpstreamApiKey = openaiUpstreamApiKey; }
         public String getPermissionMode() { return permissionMode; }
         public void setPermissionMode(String permissionMode) { this.permissionMode = permissionMode; }
-        public int getContextWindow() { return contextWindow; }
-        public void setContextWindow(int contextWindow) { this.contextWindow = contextWindow; }
         public boolean isAppendNoMcp() { return appendNoMcp; }
         public void setAppendNoMcp(boolean appendNoMcp) { this.appendNoMcp = appendNoMcp; }
         public String getCommand() { return command; }

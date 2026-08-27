@@ -112,7 +112,108 @@ export function resolveAnthropicBaseUrl(raw) {
   return value.replace(/\/+$/, "");
 }
 
-function sdkProcessEnv(home) {
+const SDK_MODEL_FALLBACK = "claude-sonnet-4-5";
+const SDK_SHORT_ALIASES = new Set(["sonnet", "opus", "haiku", "fable"]);
+/** LiteLLM /v1/models 只回目录里认识的 Anthropic id；claude-sonnet-5 不会出现在列表里。 */
+const SDK_SONNET_MODEL = "claude-sonnet-4-5";
+const SDK_OPUS_MODEL = "claude-opus-4-6";
+const SDK_HAIKU_MODEL = "claude-haiku-4-5";
+const UPSTREAM_HEADER = "X-Qianxun-Upstream-Model";
+const UPSTREAM_BASE_HEADER = "X-Qianxun-Upstream-Base-Url";
+const UPSTREAM_KEY_HEADER = "X-Qianxun-Upstream-Api-Key";
+
+export function isAnthropicSdkModel(name) {
+  const n = String(name || "").trim().toLowerCase();
+  return SDK_SHORT_ALIASES.has(n) || n.startsWith("claude-") || n.startsWith("anthropic/");
+}
+
+export function isLiteLlmGatewayAlias(name) {
+  const n = String(name || "").trim().toLowerCase();
+  return n === "openai-default" || n === "openai-compat" || n === "litellm";
+}
+
+export function stripLlmProviderPrefix(name) {
+  const v = String(name || "").trim();
+  const slash = v.indexOf("/");
+  if (slash <= 0 || slash >= v.length - 1) {
+    return v;
+  }
+  const provider = v.slice(0, slash).toLowerCase();
+  if (provider === "openai" || provider === "anthropic") {
+    return v.slice(slash + 1).trim();
+  }
+  return v;
+}
+
+function expandSdkModelAlias(name) {
+  const n = String(name || "").trim().toLowerCase();
+  if (!n || n === "sonnet" || n === "fable") {
+    return SDK_SONNET_MODEL;
+  }
+  if (n === "opus") {
+    return SDK_OPUS_MODEL;
+  }
+  if (n === "haiku") {
+    return SDK_HAIKU_MODEL;
+  }
+  if (n === "claude-sonnet-5") {
+    return SDK_SONNET_MODEL;
+  }
+  if (n === "claude-opus-5") {
+    return SDK_OPUS_MODEL;
+  }
+  if (n === "claude-haiku-5") {
+    return SDK_HAIKU_MODEL;
+  }
+  return String(name || "").trim() || SDK_MODEL_FALLBACK;
+}
+
+export function resolveSdkModel(body) {
+  const envSdk = (process.env.QIANXUN_CLAUDE_SDK_MODEL || "").trim();
+  const envAnth = (process.env.ANTHROPIC_MODEL || "").trim();
+  for (const candidate of [envSdk, envAnth]) {
+    if (candidate) {
+      return expandSdkModelAlias(candidate);
+    }
+  }
+  return SDK_MODEL_FALLBACK;
+}
+
+export function resolveUpstreamModel(body) {
+  const fromBody = String(body?.upstreamModel || "").trim();
+  const bodyModel = String(body?.model || "").trim();
+  const envModel = (process.env.QIANXUN_CLAUDE_MODEL || "").trim();
+  const bodyAsUpstream = (isAnthropicSdkModel(bodyModel) || isLiteLlmGatewayAlias(bodyModel))
+    ? ""
+    : bodyModel;
+  for (const candidate of [fromBody, bodyAsUpstream, envModel]) {
+    const id = stripLlmProviderPrefix(candidate);
+    if (id && !isAnthropicSdkModel(id) && !isLiteLlmGatewayAlias(id)) {
+      return id;
+    }
+  }
+  return "";
+}
+
+export function resolveUpstreamBaseUrl(body) {
+  return String(body?.upstreamBaseUrl || "").trim();
+}
+
+export function resolveUpstreamApiKey(body) {
+  return String(body?.upstreamApiKey || "").trim();
+}
+
+function appendCustomHeader(env, name, value) {
+  const v = String(value || "").trim();
+  if (!v) {
+    return;
+  }
+  const line = `${name}: ${v}`;
+  const prev = (env.ANTHROPIC_CUSTOM_HEADERS || "").trim();
+  env.ANTHROPIC_CUSTOM_HEADERS = prev ? `${prev}\n${line}` : line;
+}
+
+function sdkProcessEnv(home, sdkModel, upstream) {
   const env = stripProxyEnv({ ...process.env });
   const base = resolveAnthropicBaseUrl(process.env.ANTHROPIC_BASE_URL);
   env.HOME = home;
@@ -125,10 +226,62 @@ function sdkProcessEnv(home) {
   if ((process.env.ANTHROPIC_AUTH_TOKEN || "").trim()) {
     env.ANTHROPIC_AUTH_TOKEN = process.env.ANTHROPIC_AUTH_TOKEN;
   }
-  if ((process.env.ANTHROPIC_MODEL || "").trim()) {
-    env.ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL;
+  env.ANTHROPIC_MODEL = expandSdkModelAlias(sdkModel || SDK_MODEL_FALLBACK);
+  env.ANTHROPIC_DEFAULT_SONNET_MODEL = SDK_SONNET_MODEL;
+  env.ANTHROPIC_DEFAULT_OPUS_MODEL = SDK_OPUS_MODEL;
+  env.ANTHROPIC_DEFAULT_HAIKU_MODEL = SDK_HAIKU_MODEL;
+  appendCustomHeader(env, UPSTREAM_HEADER, upstream?.model);
+  appendCustomHeader(env, UPSTREAM_BASE_HEADER, upstream?.baseUrl);
+  appendCustomHeader(env, UPSTREAM_KEY_HEADER, upstream?.apiKey);
+  const windowTokens = resolveAutoCompactWindow(upstream?.contextWindow);
+  if (windowTokens > 0) {
+    env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = String(windowTokens);
+  } else {
+    delete env.CLAUDE_CODE_AUTO_COMPACT_WINDOW;
   }
+  delete env.DISABLE_COMPACT;
+  delete env.DISABLE_AUTO_COMPACT;
   return env;
+}
+
+/** SDK 按请求体中的真实上游窗口判定 autocompact；未提供则不覆盖。 */
+export function resolveAutoCompactWindow(raw) {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) {
+    return 0;
+  }
+  return Math.max(8_000, Math.min(1_000_000, Math.round(n)));
+}
+
+function emitCompactIfNeeded(message, writeLine) {
+  if (!message || typeof message !== "object" || typeof writeLine !== "function") {
+    return;
+  }
+  if (message.type === "compact") {
+    return;
+  }
+  if (message.type === "system" && message.subtype === "compact_boundary") {
+    const meta = message.compact_metadata && typeof message.compact_metadata === "object"
+      ? message.compact_metadata
+      : {};
+    writeLine({
+      type: "compact",
+      phase: "done",
+      trigger: meta.trigger || "auto",
+      preTokens: meta.pre_tokens ?? meta.preTokens ?? null,
+      session_id: message.session_id || "",
+    });
+    return;
+  }
+  if (message.type === "system" && message.subtype === "status" && message.status === "compacting") {
+    writeLine({
+      type: "compact",
+      phase: "start",
+      trigger: "",
+      preTokens: null,
+      session_id: message.session_id || "",
+    });
+  }
 }
 
 function desiredAnthropicBase() {
@@ -137,7 +290,13 @@ function desiredAnthropicBase() {
 
 function rewriteSettingsObject(current) {
   if (!current || typeof current !== "object" || Array.isArray(current)) {
-    return { next: { env: { ANTHROPIC_BASE_URL: desiredAnthropicBase() } }, changed: true };
+    return {
+      next: {
+        env: { ANTHROPIC_BASE_URL: desiredAnthropicBase() },
+        autoCompactEnabled: true,
+      },
+      changed: true,
+    };
   }
   const want = desiredAnthropicBase();
   let changed = false;
@@ -146,19 +305,27 @@ function rewriteSettingsObject(current) {
   if (prevEnv.ANTHROPIC_BASE_URL !== want) {
     changed = true;
   }
-  next.env = { ...prevEnv, ANTHROPIC_BASE_URL: want };
+  next.env = {
+    ...prevEnv,
+    ANTHROPIC_BASE_URL: want,
+    ANTHROPIC_DEFAULT_SONNET_MODEL: SDK_SONNET_MODEL,
+    ANTHROPIC_DEFAULT_OPUS_MODEL: SDK_OPUS_MODEL,
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: SDK_HAIKU_MODEL,
+  };
+  if (next.autoCompactEnabled !== true) {
+    next.autoCompactEnabled = true;
+    changed = true;
+  }
+  changed = true;
   const apiKey = (process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN || "").trim();
   if (apiKey && prevEnv.ANTHROPIC_API_KEY !== apiKey) {
     next.env.ANTHROPIC_API_KEY = apiKey;
-    changed = true;
   }
   if (apiKey && prevEnv.ANTHROPIC_AUTH_TOKEN !== apiKey) {
     next.env.ANTHROPIC_AUTH_TOKEN = apiKey;
-    changed = true;
   }
   if (typeof next.ANTHROPIC_BASE_URL === "string") {
     delete next.ANTHROPIC_BASE_URL;
-    changed = true;
   }
   return { next, changed };
 }
@@ -378,7 +545,10 @@ export async function streamTurn(body, writeLine, signal) {
   await syncPluginsManifest(home, enabledPlugins);
 
   const permissionMode = body.permissionMode || process.env.QIANXUN_CLAUDE_PERMISSION_MODE || "bypassPermissions";
-  const model = body.model || process.env.QIANXUN_CLAUDE_MODEL || process.env.ANTHROPIC_MODEL || "qwen3.6-plus";
+  const model = resolveSdkModel(body);
+  const upstreamModel = resolveUpstreamModel(body);
+  const upstreamBaseUrl = resolveUpstreamBaseUrl(body);
+  const upstreamApiKey = resolveUpstreamApiKey(body);
   const soul = await readProfileSoul(home);
   const append = buildSystemAppend(cwd, soul, enabledSkillInfos);
 
@@ -396,8 +566,14 @@ export async function streamTurn(body, writeLine, signal) {
     ? `\n【已启用插件】${enabledPlugins.map((p) => p.name).join("、")}`
     : "";
   await ensureAnthropicBaseInSettings(home, userId);
-  const sdkEnv = sdkProcessEnv(home);
-  console.log(`[claude-code] sdk api=${sdkEnv.ANTHROPIC_BASE_URL} model=${model} proxy=${sdkEnv.HTTP_PROXY === undefined ? "unset" : "set"}`);
+  const compactWindow = resolveAutoCompactWindow(body?.contextWindow);
+  const sdkEnv = sdkProcessEnv(home, model, {
+    model: upstreamModel,
+    baseUrl: upstreamBaseUrl,
+    apiKey: upstreamApiKey,
+    contextWindow: compactWindow,
+  });
+  console.log(`[claude-code] sdk api=${sdkEnv.ANTHROPIC_BASE_URL} model=${model} upstream=${upstreamModel || "-"} base=${upstreamBaseUrl || "-"} key=${upstreamApiKey ? "set" : "unset"} compactWindow=${compactWindow} proxy=${sdkEnv.HTTP_PROXY === undefined ? "unset" : "set"}`);
   const options = {
     cwd,
     abortController,
@@ -407,6 +583,8 @@ export async function streamTurn(body, writeLine, signal) {
     includePartialMessages: true,
     persistSession: true,
     settingSources: ["user", "project"],
+    // 子任务正文/工具带 parent_tool_use_id，供前端挂到 Agent 卡片下
+    forwardSubagentText: true,
     systemPrompt: { type: "preset", preset: "claude_code", append: append + pluginHint },
     tools,
     allowedTools,
@@ -440,10 +618,11 @@ export async function streamTurn(body, writeLine, signal) {
       if (message && message.session_id) {
         lastSession = message.session_id;
       }
-      if (message && message.type === "result") {
+      if (message && message.type === "result" && !message.parent_tool_use_id && !message.parentToolUseId) {
         sawResult = true;
       }
       writeLine(message);
+      emitCompactIfNeeded(message, writeLine);
     }
   } catch (ex) {
     if (abortController.signal.aborted) {

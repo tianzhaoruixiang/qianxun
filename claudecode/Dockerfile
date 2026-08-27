@@ -1,5 +1,19 @@
 # 火山 AIO 作智能体执行沙箱基座（Python / 浏览器 / Jupyter / MCP）。
 # 不要覆盖 ENTRYPOINT：必须走 /opt/gem/run.sh，由 supervisord 拉起千寻网关。
+#
+# npm 在宿主机架构安装：AIO 内的 Node 在 QEMU 下会 SIGSEGV，无法交叉执行 npm。
+# 用 --os/--cpu 拉取目标平台的 SDK 可选包（linux-x64 / linux-arm64）。
+FROM --platform=$BUILDPLATFORM node:22-bookworm-slim AS npm-deps
+ARG TARGETARCH
+WORKDIR /app
+COPY package.json ./
+RUN set -eux; \
+  case "${TARGETARCH}" in \
+    amd64) npm install --omit=dev --os=linux --cpu=x64 ;; \
+    arm64) npm install --omit=dev --os=linux --cpu=arm64 ;; \
+    *) npm install --omit=dev ;; \
+  esac
+
 FROM enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:latest
 
 COPY requirements.txt /tmp/requirements.txt
@@ -8,7 +22,7 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt \
 
 WORKDIR /app
 COPY package.json ./
-RUN npm install --omit=dev
+COPY --from=npm-deps /app/node_modules ./node_modules
 COPY src ./src
 COPY supervisord.qianxun.conf /opt/gem/supervisord/supervisord.qianxun.conf
 COPY disable-aio-browser.sh /opt/gem/disable-aio-browser.sh

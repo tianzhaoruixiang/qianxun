@@ -13,13 +13,14 @@ class ChatGoalInvocationTest {
     @Test
     void roundTripJson_shouldClipAndRestore() {
         ChatGoalInvocation.Goal goal = ChatGoalInvocation.fromRequest(
-                new SessionGoalRequest("  结案  ", "完成全部材料", "1.收集\n2.撰写", "不得外传"));
+                new SessionGoalRequest("  结案  ", "完成全部材料", "列出证据清单", "不得外传", 20));
         String json = ChatGoalInvocation.toJson(goal);
         ChatGoalInvocation.Goal back = ChatGoalInvocation.parseJson(json);
         assertThat(back.title()).isEqualTo("结案");
         assertThat(back.description()).isEqualTo("完成全部材料");
-        assertThat(back.steps()).contains("撰写");
+        assertThat(back.steps()).contains("证据");
         assertThat(back.constraints()).isEqualTo("不得外传");
+        assertThat(back.stopAfterTurns()).isEqualTo(20);
         assertThat(back.isBlank()).isFalse();
     }
 
@@ -31,48 +32,50 @@ class ChatGoalInvocationTest {
     }
 
     @Test
-    void hermesCommand_shouldStartWithSlashGoalAndContractFields() {
+    void hermesCommand_shouldBeClaudeCodeCondition() {
         String cmd = ChatGoalInvocation.formatHermesCommand(
-                new ChatGoalInvocation.Goal("调研", "形成报告", "分三步", "中文"));
-        assertThat(cmd).startsWith("/goal 调研");
-        assertThat(cmd).contains("分三步");
-        assertThat(cmd).contains("verify: 形成报告");
-        assertThat(cmd).contains("constraints: 中文");
+                new ChatGoalInvocation.Goal("调研", "形成报告", "输出 Markdown", "中文", 15));
+        assertThat(cmd).startsWith("/goal ");
+        assertThat(cmd).contains("调研");
+        assertThat(cmd).contains("形成报告");
+        assertThat(cmd).contains("验收方式：输出 Markdown");
+        assertThat(cmd).contains("约束：中文");
+        assertThat(cmd).contains("or stop after 15 turns");
+        assertThat(cmd).doesNotContain("verify:");
         assertThat(cmd).doesNotContain("【长程目标】");
-        assertThat(cmd).doesNotContain("Hermes");
     }
 
     @Test
     void hermesCommand_shouldNotTreatReservedVerbAsHeadline() {
         String cmd = ChatGoalInvocation.formatHermesCommand(
                 new ChatGoalInvocation.Goal("clear", "x", "", ""));
-        assertThat(cmd).startsWith("/goal 长程任务 clear");
+        assertThat(cmd).startsWith("/goal 完成以下目标：");
         assertThat(cmd).isNotEqualTo("/goal clear");
     }
 
     @Test
     void apply_kickoffShouldRewriteLastUserToHermesCommand() {
         List<Map<String, String>> messages = List.of(
-                Map.of("role", "user", "content", "【长程目标】调研\n成功标准：形成报告")
+                Map.of("role", "user", "content", "【长程目标】调研\n完成条件：形成报告")
         );
         List<Map<String, String>> out = ChatGoalInvocation.apply(
                 messages, new ChatGoalInvocation.Goal("调研", "形成报告", "", ""), true);
         assertThat(out).hasSize(1);
         assertThat(out.get(0).get("role")).isEqualTo("user");
-        assertThat(out.get(0).get("content")).isEqualTo("/goal 调研\nverify: 形成报告");
+        assertThat(out.get(0).get("content")).isEqualTo("/goal 调研：形成报告");
     }
 
     @Test
     void apply_laterShouldRewriteHistoricalDisplayButKeepFollowUp() {
         List<Map<String, String>> messages = List.of(
-                Map.of("role", "user", "content", "【长程目标】目标A\n请按该目标分步执行，在达成成功标准前不要停止。"),
+                Map.of("role", "user", "content", "【长程目标】目标A\n完成条件：做成"),
                 Map.of("role", "assistant", "content", "好"),
                 Map.of("role", "user", "content", "继续")
         );
         List<Map<String, String>> out = ChatGoalInvocation.apply(
                 messages, new ChatGoalInvocation.Goal("目标A", "做成", "", ""), false);
-        assertThat(out.get(0).get("content")).startsWith("/goal 目标A");
-        assertThat(out.get(0).get("content")).contains("verify: 做成");
+        assertThat(out.get(0).get("content")).startsWith("/goal ");
+        assertThat(out.get(0).get("content")).contains("做成");
         assertThat(out.get(2).get("content")).isEqualTo("继续");
         assertThat(out.stream().noneMatch(m -> "system".equals(m.get("role")))).isTrue();
     }
@@ -102,7 +105,8 @@ class ChatGoalInvocationTest {
     @Test
     void formatUserVisible_shouldBeChinese() {
         String text = ChatGoalInvocation.formatUserVisible(
-                new ChatGoalInvocation.Goal("调研", "形成报告", "分三步", ""));
-        assertThat(text).contains("【长程目标】调研").contains("成功标准").contains("分步执行");
+                new ChatGoalInvocation.Goal("调研", "形成报告", "贴出目录", "", 10));
+        assertThat(text).contains("【长程目标】调研").contains("完成条件").contains("验收方式").contains("轮次上限：10");
+        assertThat(text).doesNotContain("分步执行");
     }
 }

@@ -60,6 +60,7 @@ public class QianXunServiceChatStream {
     private final ClaudeCodeChatClient claudeCodeChatClient;
     private final ActiveRunRegistry activeRunRegistry;
     private final HermesLiveTranscriptService hermesLiveTranscriptService;
+    private final SystemSettingsService systemSettingsService;
 
     public QianXunServiceChatStream(
             QianXunServiceChatSession sessionService,
@@ -78,7 +79,8 @@ public class QianXunServiceChatStream {
             HermesSkillService hermesSkillService,
             ClaudeCodeChatClient claudeCodeChatClient,
             ActiveRunRegistry activeRunRegistry,
-            HermesLiveTranscriptService hermesLiveTranscriptService
+            HermesLiveTranscriptService hermesLiveTranscriptService,
+            SystemSettingsService systemSettingsService
     ) {
         this.sessionService = sessionService;
         this.openAiClient = openAiClient;
@@ -97,6 +99,7 @@ public class QianXunServiceChatStream {
         this.claudeCodeChatClient = claudeCodeChatClient;
         this.activeRunRegistry = activeRunRegistry;
         this.hermesLiveTranscriptService = hermesLiveTranscriptService;
+        this.systemSettingsService = systemSettingsService;
     }
 
     public void streamAnswer(
@@ -373,14 +376,7 @@ public class QianXunServiceChatStream {
         }
         String toolName = String.valueOf(data.getOrDefault("toolName", ""));
         if (isDelegationTool(toolName)) {
-            publish(ctx, "delegation_update", Map.of(
-                    "toolCallId", data.getOrDefault("toolCallId", ""),
-                    "toolName", toolName,
-                    "status", data.getOrDefault("status", ""),
-                    "delegationId", data.getOrDefault("delegationId", data.getOrDefault("childSessionId", "")),
-                    "taskIndex", data.getOrDefault("taskIndex", null),
-                    "summary", data.getOrDefault("summary", data.getOrDefault("result", ""))
-            ));
+            publish(ctx, "delegation_update", delegationUpdatePayload(data, toolName));
         }
         publish(ctx, "tool_call", data);
         maybeFlushDraft(ctx);
@@ -433,9 +429,10 @@ public class QianXunServiceChatStream {
     }
 
     private Map<String, Object> upsertToolCall(StreamContext ctx, OpenAiCompatibleStreamClient.ToolCallEvent tc, boolean[] createdOut) {
-        String id = tc.toolCallId() == null || tc.toolCallId().isBlank()
-                ? "call_" + (ctx.toolCalls.size() + 1)
-                : tc.toolCallId();
+        boolean idFromUpstream = tc.toolCallId() != null && !tc.toolCallId().isBlank();
+        String id = idFromUpstream
+                ? tc.toolCallId().trim()
+                : "call_" + (ctx.toolCalls.size() + 1);
         String incomingName = tc.functionName() == null ? "" : tc.functionName().trim();
         Map<String, Object> row = null;
         for (Map<String, Object> existing : ctx.toolCalls) {
@@ -444,12 +441,15 @@ public class QianXunServiceChatStream {
                 break;
             }
         }
-        if (row == null && !incomingName.isBlank()) {
+        // 仅无上游 id 的增量（参数分片）才按同名未完成项合并；并行子智能体各有 id，必须分列
+        if (row == null && !idFromUpstream && !incomingName.isBlank()) {
+            String incomingParent = parentIdOf(tc);
             for (int i = ctx.toolCalls.size() - 1; i >= 0; i--) {
                 Map<String, Object> existing = ctx.toolCalls.get(i);
                 String status = String.valueOf(existing.getOrDefault("status", ""));
                 String name = String.valueOf(existing.getOrDefault("toolName", ""));
-                if (incomingName.equals(name) && !"completed".equals(status) && !"error".equals(status)) {
+                if (incomingName.equals(name) && !"completed".equals(status) && !"error".equals(status)
+                        && incomingParent.equals(String.valueOf(existing.getOrDefault("parentId", "")))) {
                     row = existing;
                     row.put("toolCallId", id);
                     break;
@@ -495,7 +495,7 @@ public class QianXunServiceChatStream {
             row.put("result", tc.result());
         }
         if (tc.status() != null && !tc.status().isBlank()) {
-            row.put("status", tc.status());
+            applyIncomingStatus(row, tc.status());
         }
         // 后台等待中：不要保留派工瞬间的 endedAt，否则前端会显示已结束
         if ("awaiting".equals(String.valueOf(row.get("status")))) {
@@ -508,6 +508,14 @@ public class QianXunServiceChatStream {
             row.put("endedAt", tc.endedAt());
         }
         mergeToolDetails(row, tc.details());
+        attachSubagentToOpenDelegation(ctx, row, incomingName);
+        String stAfter = String.valueOf(row.getOrDefault("status", "")).toLowerCase();
+        Object eventType = row.get("eventType");
+        if (("completed".equals(stAfter) || "error".equals(stAfter))
+                && eventType != null
+                && String.valueOf(eventType).toLowerCase().contains("subagent.complete")) {
+            closeDescendantToolCalls(ctx, String.valueOf(row.getOrDefault("toolCallId", "")), stAfter);
+        }
         Object started = row.get("startedAt");
         Object ended = row.get("endedAt");
         if (started instanceof Number s && ended instanceof Number e) {
@@ -521,6 +529,73 @@ public class QianXunServiceChatStream {
         }
         ingestGeneratedDocuments(ctx, row);
         return row;
+    }
+
+    /** Dashboard 子智能体事件若未带 parent_id，挂到当前未结束的委派工具下，便于前端并排展示。 */
+    private static void attachSubagentToOpenDelegation(
+            StreamContext ctx, Map<String, Object> row, String incomingName) {
+        if (row == null || incomingName == null) {
+            return;
+        }
+        if (!"subagent".equalsIgnoreCase(incomingName.trim())) {
+            return;
+        }
+        Object existingParent = row.get("parentId");
+        if (existingParent != null && !String.valueOf(existingParent).isBlank()) {
+            return;
+        }
+        for (int i = ctx.toolCalls.size() - 1; i >= 0; i--) {
+            Map<String, Object> existing = ctx.toolCalls.get(i);
+            if (existing == row) {
+                continue;
+            }
+            String name = String.valueOf(existing.getOrDefault("toolName", ""));
+            if (!isDelegationTool(name) || "subagent".equalsIgnoreCase(name)) {
+                continue;
+            }
+            String status = String.valueOf(existing.getOrDefault("status", "")).toLowerCase();
+            if ("completed".equals(status) || "error".equals(status)) {
+                continue;
+            }
+            Object pid = existing.get("toolCallId");
+            if (pid != null && !String.valueOf(pid).isBlank()) {
+                row.put("parentId", String.valueOf(pid));
+            }
+            return;
+        }
+    }
+
+    private static String parentIdOf(OpenAiCompatibleStreamClient.ToolCallEvent tc) {
+        if (tc == null || tc.details() == null) {
+            return "";
+        }
+        Object v = tc.details().get("parentId");
+        return v == null ? "" : String.valueOf(v).trim();
+    }
+
+    /**
+     * {@link Map#of} 不允许 null；并行派工时尚未有 taskIndex，会在开场白之后把整轮 SSE 打挂。
+     */
+    static Map<String, Object> delegationUpdatePayload(Map<String, Object> data, String toolName) {
+        LinkedHashMap<String, Object> payload = new LinkedHashMap<>();
+        payload.put("toolCallId", data.getOrDefault("toolCallId", ""));
+        payload.put("toolName", toolName == null ? "" : toolName);
+        payload.put("status", data.getOrDefault("status", ""));
+        Object delegationId = data.get("delegationId");
+        if (delegationId == null) {
+            delegationId = data.get("childSessionId");
+        }
+        payload.put("delegationId", delegationId == null ? "" : delegationId);
+        Object taskIndex = data.get("taskIndex");
+        if (taskIndex != null) {
+            payload.put("taskIndex", taskIndex);
+        }
+        Object summary = data.get("summary");
+        if (summary == null || String.valueOf(summary).isBlank()) {
+            summary = data.get("result");
+        }
+        payload.put("summary", summary == null ? "" : summary);
+        return payload;
     }
 
     private static boolean isDelegationTool(String toolName) {
@@ -726,6 +801,19 @@ public class QianXunServiceChatStream {
         publish(ctx, "usage", data);
     }
 
+    private void sendCompactEvent(StreamContext ctx, String phase, String trigger, Integer preTokens) {
+        if (phase == null || phase.isBlank()) {
+            return;
+        }
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("phase", phase);
+        data.put("trigger", trigger == null ? "" : trigger);
+        if (preTokens != null) {
+            data.put("preTokens", preTokens);
+        }
+        publish(ctx, "compact", data);
+    }
+
     // ── 工具方法 ───────────────────────────────────────────────────────────────
 
     private String buildLlmRequestJson(String model, List<Map<String, String>> messages) {
@@ -787,11 +875,7 @@ public class QianXunServiceChatStream {
     ) {
         if (properties.isAgentRunnerEnabled()) {
             QianxunProperties.Claude claude = properties.getClaude();
-            String model = blankOrDefault(claude.getChatModel(), "claude-sonnet-4-5");
-            if (hermesProfile != null && !hermesProfile.isBlank()
-                    && !"default".equals(ClaudeCodePaths.normalizeProfileName(hermesProfile))) {
-                model = blankOrDefault(HermesAgentClient.sanitizeProfileName(hermesProfile), model);
-            }
+            String model = blankOrDefault(systemSettingsService.resolvedClaudeChatModel(), "claude-sonnet-4-5");
             return new ChatEndpoint(
                     hermesAgentClient.chatBaseUrlForProfile(hermesProfile),
                     claude.getApiKey(),
@@ -857,7 +941,7 @@ public class QianXunServiceChatStream {
         if (!registryBaseMatchesHermes(baseUrl)) {
             return code;
         }
-        String chat = trim(properties.getClaude().getChatModel());
+        String chat = trim(systemSettingsService.resolvedClaudeChatModel());
         if ("qianxun-default".equalsIgnoreCase(code) || "hermes-agent".equalsIgnoreCase(code)
                 || "claude-code".equalsIgnoreCase(code)) {
             return blankOrDefault(chat, "claude-sonnet-4-5");
@@ -1102,7 +1186,9 @@ public class QianXunServiceChatStream {
                     toolCall -> sendToolCallEvent(ctx, toolCall),
                     usage -> sendUsageEvent(ctx, usage, contextWindow),
                     ctx.run()::isCancelRequested,
-                    abort -> ctx.run().onInterrupt(abort)
+                    abort -> ctx.run().onInterrupt(abort),
+                    (phase, trigger, preTokens) -> sendCompactEvent(ctx, phase, trigger, preTokens),
+                    contextWindow
             );
             applyStreamMeta(ctx, streamMeta, llmStart, contextWindow);
         } else {
@@ -1236,7 +1322,7 @@ public class QianXunServiceChatStream {
             return new ChatEndpoint(
                     "claude-code",
                     claude.getApiKey(),
-                    blankOrDefault(claude.getChatModel(), "claude-sonnet-4-5")
+                    blankOrDefault(systemSettingsService.resolvedClaudeChatModel(), "claude-sonnet-4-5")
             );
         }
         if (selectedModelCode != null && !selectedModelCode.isBlank()) {
@@ -1355,7 +1441,129 @@ public class QianXunServiceChatStream {
         return items.size() > 3 ? items.subList(0, 3) : items;
     }
 
+    private static boolean isSubagentRow(Map<String, Object> row) {
+        if (row == null) {
+            return false;
+        }
+        Object flag = row.get("subagent");
+        if (Boolean.TRUE.equals(flag) || "true".equalsIgnoreCase(String.valueOf(flag))) {
+            return true;
+        }
+        String n = String.valueOf(row.getOrDefault("toolName", "")).trim().toLowerCase();
+        return n.equals("subagent") || n.equals("agent") || n.equals("task") || n.contains("delegate");
+    }
+
+    private static void applyIncomingStatus(Map<String, Object> row, String incomingRaw) {
+        String incoming = incomingRaw.trim().toLowerCase();
+        String current = String.valueOf(row.getOrDefault("status", "")).trim().toLowerCase();
+        boolean currentTerminal = "completed".equals(current) || "error".equals(current);
+        boolean incomingProgress = "running".equals(incoming) || "started".equals(incoming);
+        if (currentTerminal && incomingProgress) {
+            if (isSubagentRow(row)) {
+                row.put("status", incomingRaw);
+                row.remove("endedAt");
+                row.remove("durationMs");
+            }
+            return;
+        }
+        if (("awaiting".equals(current) || "background".equals(current)) && incomingProgress) {
+            return;
+        }
+        row.put("status", incomingRaw);
+    }
+
+    private static boolean hasAwaitingAncestor(StreamContext ctx, Map<String, Object> row) {
+        String pid = String.valueOf(row.getOrDefault("parentId", "")).trim();
+        int guard = 0;
+        while (!pid.isBlank() && guard++ < 32) {
+            Map<String, Object> parent = null;
+            for (Map<String, Object> existing : ctx.toolCalls) {
+                if (pid.equals(String.valueOf(existing.getOrDefault("toolCallId", "")))) {
+                    parent = existing;
+                    break;
+                }
+            }
+            if (parent == null) {
+                return false;
+            }
+            String st = String.valueOf(parent.getOrDefault("status", "")).toLowerCase();
+            if ("awaiting".equals(st) || "background".equals(st)) {
+                return true;
+            }
+            pid = String.valueOf(parent.getOrDefault("parentId", "")).trim();
+        }
+        return false;
+    }
+
+    private static boolean isDescendantOf(StreamContext ctx, Map<String, Object> row, String ancestorId) {
+        if (ancestorId == null || ancestorId.isBlank()) {
+            return false;
+        }
+        String pid = String.valueOf(row.getOrDefault("parentId", "")).trim();
+        int guard = 0;
+        while (!pid.isBlank() && guard++ < 32) {
+            if (ancestorId.equals(pid)) {
+                return true;
+            }
+            String next = "";
+            for (Map<String, Object> existing : ctx.toolCalls) {
+                if (pid.equals(String.valueOf(existing.getOrDefault("toolCallId", "")))) {
+                    next = String.valueOf(existing.getOrDefault("parentId", "")).trim();
+                    break;
+                }
+            }
+            pid = next;
+        }
+        return false;
+    }
+
+    private static void closeDescendantToolCalls(StreamContext ctx, String parentId, String terminalStatus) {
+        if (parentId == null || parentId.isBlank() || ctx.toolCalls.isEmpty()) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        for (Map<String, Object> row : ctx.toolCalls) {
+            if (!isDescendantOf(ctx, row, parentId)) {
+                continue;
+            }
+            String status = String.valueOf(row.getOrDefault("status", "")).trim().toLowerCase();
+            if ("completed".equals(status) || "error".equals(status)
+                    || "awaiting".equals(status) || "background".equals(status)) {
+                continue;
+            }
+            row.put("status", terminalStatus);
+            if (row.get("endedAt") == null) {
+                row.put("endedAt", now);
+            }
+        }
+    }
+
+    private static void closeOpenToolCalls(StreamContext ctx, String terminalStatus) {
+        if (ctx.toolCalls.isEmpty()) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        for (Map<String, Object> row : ctx.toolCalls) {
+            String status = String.valueOf(row.getOrDefault("status", "")).trim().toLowerCase();
+            if ("completed".equals(status) || "error".equals(status)
+                    || "awaiting".equals(status) || "background".equals(status)
+                    || hasAwaitingAncestor(ctx, row)) {
+                continue;
+            }
+            row.put("status", terminalStatus);
+            if (row.get("endedAt") == null) {
+                row.put("endedAt", now);
+            }
+            Object started = row.get("startedAt");
+            Object ended = row.get("endedAt");
+            if (started instanceof Number s && ended instanceof Number e) {
+                row.put("durationMs", Math.max(0, e.longValue() - s.longValue()));
+            }
+        }
+    }
+
     private void saveAndComplete(StreamContext ctx) {
+        closeOpenToolCalls(ctx, "completed");
         String sessionId = ctx.logBuilder().build().sessionId();
         String answer    = ctx.responseText.toString();
         ctx.logBuilder().llmResponseText(answer);

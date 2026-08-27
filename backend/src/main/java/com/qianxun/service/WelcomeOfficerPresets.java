@@ -1,16 +1,43 @@
 package com.qianxun.service;
 
 import java.util.List;
+import java.util.Set;
 
 /**
- * 数智干警欢迎页三条预置对话：存 {@code ui_string_config}，管理员在智能体市场改。
+ * 数智干警欢迎页三条预置对话与头像：存 {@code ui_string_config}，管理员在智能体市场改。
  */
 public final class WelcomeOfficerPresets {
 
     public static final String KEY_1 = "welcome.preset_chat_1";
     public static final String KEY_2 = "welcome.preset_chat_2";
     public static final String KEY_3 = "welcome.preset_chat_3";
+    public static final String KEY_PORTRAIT = "welcome.officer_portrait";
+    public static final String DEFAULT_PORTRAIT = "officer";
     public static final int MAX_CHARS = 2000;
+
+    private static final Set<String> ALLOWED_PORTRAITS = Set.of(
+            DEFAULT_PORTRAIT,
+            "qinglan",
+            "mochuan",
+            "nuanchen",
+            "zisu",
+            "jilan",
+            "danxia",
+            "cangsong",
+            "xingdian",
+            "chisong",
+            "yunhui",
+            "jinglan",
+            "jinghe",
+            "jingshu",
+            "jingyan",
+            "jingning",
+            "jingbo",
+            "jingzhao",
+            "jingxue",
+            "jingchen",
+            "jingyue"
+    );
 
     public static final String DEFAULT_1 =
             "请检索过去24小时与“低空经济”相关的重点政策动态，并按地区汇总。";
@@ -25,6 +52,14 @@ public final class WelcomeOfficerPresets {
         String t = raw == null ? "" : raw.trim();
         if (t.length() > MAX_CHARS) {
             return t.substring(0, MAX_CHARS);
+        }
+        return t;
+    }
+
+    public static String clipPortrait(String raw) {
+        String t = raw == null ? "" : raw.trim().toLowerCase();
+        if (t.isEmpty() || !ALLOWED_PORTRAITS.contains(t)) {
+            return DEFAULT_PORTRAIT;
         }
         return t;
     }

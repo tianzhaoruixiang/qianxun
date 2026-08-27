@@ -90,6 +90,9 @@ services:
       - LITELLM_LOG=${LITELLM_LOG}
       # 与 config.yaml 双保险：Anthropic /v1/messages 不得转发到上游 /v1/responses
       - LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES=true
+      # 默认开启：把多条/中间 system 合并到首位，避免 Qwen vLLM 400
+      - LITELLM_MERGE_LEADING_SYSTEM=${LITELLM_MERGE_LEADING_SYSTEM:-true}
+      - PYTHONPATH=/app
       # 内网：勿走宿主机/镜像自带代理访问容器名或内网网关
       - HTTP_PROXY=
       - HTTPS_PROXY=
@@ -100,7 +103,8 @@ services:
       - NO_PROXY=litellm,claude-code,qianxun-backend,minio,tidb,localhost,127.0.0.1,host.docker.internal
       - no_proxy=litellm,claude-code,qianxun-backend,minio,tidb,localhost,127.0.0.1,host.docker.internal
     volumes:
-      - ./litellm/config.yaml:/app/config.yaml:ro
+      - ../litellm/config.yaml:/app/config.yaml:ro
+      - ../litellm/merge_leading_system.py:/app/merge_leading_system.py:ro
     command: ["--config", "/app/config.yaml", "--port", "4000", "--host", "0.0.0.0"]
     ports:
       # 宿主端口避免与 TiDB 的 4000 冲突；容器内仍是 4000（claude-code → http://litellm:4000）
@@ -119,10 +123,10 @@ services:
       - qianxun_net
 
   claude-code:
-    image: qianxun/claude-code:arm64-dev
+    image: qianxun/claude-code:dev
     container_name: qianxun-claude-code
     build:
-      context: ./claudecode
+      context: ../claudecode
       dockerfile: Dockerfile
     restart: unless-stopped
     depends_on:
@@ -142,6 +146,7 @@ services:
       - ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN}
       - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL}
       - ANTHROPIC_MODEL=${ANTHROPIC_MODEL}
+      - QIANXUN_CLAUDE_SDK_MODEL=${QIANXUN_CLAUDE_SDK_MODEL:-sonnet}
       - CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
       - HTTP_PROXY=
       - HTTPS_PROXY=
@@ -155,7 +160,6 @@ services:
       - CLAUDE_GATEWAY_ALLOW_INSECURE=${CLAUDE_GATEWAY_ALLOW_INSECURE:-true}
       - QIANXUN_CLAUDE_MODEL=${QIANXUN_CLAUDE_MODEL}
       - QIANXUN_CLAUDE_PERMISSION_MODE=${QIANXUN_CLAUDE_PERMISSION_MODE}
-      - QIANXUN_CLAUDE_CONTEXT_WINDOW=${QIANXUN_CLAUDE_CONTEXT_WINDOW}
       - QIANXUN_CLAUDE_THINKING=${QIANXUN_CLAUDE_THINKING}
       # AIO 可选组件（内网可设 true 减负载；Chrome 浏览器已在镜像构建时关闭）
       - DISABLE_JUPYTER=${DISABLE_JUPYTER:-false}
@@ -164,7 +168,7 @@ services:
       - RUN_HOOK_PRE_SERVICES=mkdir -p /opt/data; chown -R gem:gem /opt/data; chmod -R a+rwX /opt/data; if [ -x /opt/gem/disable-aio-browser.sh ]; then /opt/gem/disable-aio-browser.sh; fi
     volumes:
       - ./data/claudecode:/opt/data
-      - ./claudecode/disable-aio-browser.sh:/opt/gem/disable-aio-browser.sh:ro
+      - ../claudecode/disable-aio-browser.sh:/opt/gem/disable-aio-browser.sh:ro
     ports:
       - "${CLAUDE_CODE_PORT}:${CLAUDE_CODE_PORT}"
       # AIO Dashboard / VNC / Jupyter / MCP（宿主勿占用后端 8080）
@@ -179,12 +183,12 @@ services:
       - qianxun_net
 
   qianxun-backend:
-    image: qianxun/backend:arm64-dev
+    image: qianxun/backend:dev
     container_name: qianxun-backend
     build:
       context: ..
       dockerfile: docker/backend.Dockerfile
-    restart: on-failure
+    restart: unless-stopped
     depends_on:
       tidb:
         condition: service_healthy
@@ -210,8 +214,10 @@ services:
       - QIANXUN_CLAUDE_BASE_URL=${QIANXUN_CLAUDE_BASE_URL}
       - CLAUDE_GATEWAY_KEY=${CLAUDE_GATEWAY_KEY}
       - QIANXUN_CLAUDE_MODEL=${QIANXUN_CLAUDE_MODEL}
+      - QIANXUN_CLAUDE_SDK_MODEL=${QIANXUN_CLAUDE_SDK_MODEL:-sonnet}
       - QIANXUN_CLAUDE_PERMISSION_MODE=${QIANXUN_CLAUDE_PERMISSION_MODE}
-      - QIANXUN_CLAUDE_CONTEXT_WINDOW=${QIANXUN_CLAUDE_CONTEXT_WINDOW}
+      - OPENAI_UPSTREAM_BASE_URL=${OPENAI_UPSTREAM_BASE_URL}
+      - OPENAI_UPSTREAM_API_KEY=${OPENAI_UPSTREAM_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - QIANXUN_LLM_BASE_URL=${QIANXUN_LLM_BASE_URL}
       - QIANXUN_LLM_MODEL=${QIANXUN_LLM_MODEL}
@@ -226,13 +232,13 @@ services:
       test: ["CMD", "wget", "-qO/dev/null", "http://127.0.0.1:8080/QianXunService/auth/health"]
       interval: 5s
       timeout: 5s
-      retries: 60
-      start_period: 30s
+      retries: 12
+      start_period: 60s
     networks:
       - qianxun_net
 
   qianxun-frontend:
-    image: qianxun/frontend:arm64-dev
+    image: qianxun/frontend:dev
     container_name: qianxun-frontend
     build:
       context: ..

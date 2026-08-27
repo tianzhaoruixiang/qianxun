@@ -24,6 +24,9 @@ public final class TokenUsageMerge {
         if (usage == null) {
             return previous;
         }
+        if (usage.liveOccupancy()) {
+            return mergeLiveOccupancy(previous, usage, fallbackContextWindow);
+        }
         if (usage.sessionSnapshot() || boolVal(previous, "sessionSnapshot")) {
             return mergeSnapshot(previous, usage, fallbackContextWindow);
         }
@@ -56,6 +59,43 @@ public final class TokenUsageMerge {
         data.put("contextUsed", contextUsed);
         data.put("contextPercent", percent);
         data.put("sessionSnapshot", true);
+        return data;
+    }
+
+    /** 流式中间帧：只刷新当前窗口占用，不把中间 API 调用加进本轮计费。 */
+    private static Map<String, Object> mergeLiveOccupancy(
+            Map<String, Object> previous,
+            OpenAiCompatibleStreamClient.TokenUsage usage,
+            int fallbackContextWindow
+    ) {
+        int prompt = nz(usage.promptTokens());
+        int completion = nz(usage.completionTokens());
+        int prevUsed = intVal(previous, "contextUsed");
+        int prevOut = intVal(previous, "liveOutputTokens");
+        int occupied;
+        if (usage.contextUsed() != null && usage.contextUsed() > 0) {
+            occupied = usage.contextUsed();
+        } else if (prompt > 0) {
+            occupied = prompt + completion;
+        } else if (completion > 0 && prevUsed > 0) {
+            occupied = Math.max(completion, prevUsed - prevOut + completion);
+        } else {
+            occupied = prevUsed;
+        }
+        int window = pickWindow(usage.contextWindow(), previous, fallbackContextWindow);
+        int contextUsed = occupied > 0 ? occupied : intVal(previous, "contextUsed");
+        double percent = window > 0 && contextUsed > 0
+                ? clampPercent(contextUsed * 100.0 / window)
+                : doubleVal(previous, "contextPercent");
+
+        Map<String, Object> data = previous == null ? new LinkedHashMap<>() : new LinkedHashMap<>(previous);
+        data.put("contextWindow", window);
+        data.put("contextUsed", contextUsed);
+        data.put("contextPercent", percent);
+        data.put("live", true);
+        if (completion > 0) {
+            data.put("liveOutputTokens", completion);
+        }
         return data;
     }
 

@@ -33,4 +33,11 @@ class WelcomeOfficerPresetsTest {
         assertThat(WelcomeOfficerPresets.clip("x".repeat(WelcomeOfficerPresets.MAX_CHARS + 8)))
                 .hasSize(WelcomeOfficerPresets.MAX_CHARS);
     }
+
+    @Test
+    void clipPortrait_shouldKeepKnownIdsAndFallback() {
+        assertThat(WelcomeOfficerPresets.clipPortrait(" jinglan ")).isEqualTo("jinglan");
+        assertThat(WelcomeOfficerPresets.clipPortrait("")).isEqualTo(WelcomeOfficerPresets.DEFAULT_PORTRAIT);
+        assertThat(WelcomeOfficerPresets.clipPortrait("unknown")).isEqualTo(WelcomeOfficerPresets.DEFAULT_PORTRAIT);
+    }
 }

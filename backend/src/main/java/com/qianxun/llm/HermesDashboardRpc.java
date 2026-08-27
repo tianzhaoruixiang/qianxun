@@ -8,6 +8,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -400,6 +401,79 @@ public final class HermesDashboardRpc {
     }
 
     /**
+     * {@code subagent.tool} 除刷新父卡片外，再发一条挂在子智能体 id 下的真实工具行，
+     * 否则前端按 parentId 找不到子调用。
+     */
+    public static OpenAiCompatibleStreamClient.ToolCallEvent toSubagentChildToolEvent(
+            String type, JsonNode payload) {
+        if (type == null || type.isBlank() || payload == null || payload.isMissingNode() || payload.isNull()) {
+            return null;
+        }
+        String normalized = type.trim().toLowerCase(Locale.ROOT);
+        if (!normalized.startsWith("subagent.tool")) {
+            return null;
+        }
+        String parentId = firstText(payload, "subagent_id", "child_session_id");
+        Integer taskIndex = firstInt(payload, "task_index");
+        if (parentId.isBlank()) {
+            parentId = taskIndex != null ? "subagent-" + taskIndex : "";
+        }
+        if (parentId.isBlank()) {
+            return null;
+        }
+        String toolName = firstText(payload, "tool_name", "toolName", "name");
+        if (toolName.isBlank()) {
+            toolName = "unknown_tool";
+        }
+        String explicitId = firstText(payload, "tool_call_id", "toolCallId", "tool_use_id", "tool_id", "call_id");
+        String text = firstText(payload, "text", "tool_preview", "preview");
+        String childId = explicitId;
+        if (childId.isBlank()) {
+            childId = parentId + ":" + toolName + ":" + Integer.toUnsignedString(Objects.hash(text, taskIndex));
+        }
+        long now = System.currentTimeMillis();
+        LinkedHashMap<String, Object> details = new LinkedHashMap<>();
+        details.put("eventType", type.trim());
+        details.put("parentId", parentId);
+        String context = firstText(payload, "goal");
+        if (!context.isBlank()) {
+            details.put("context", truncate(context, 200));
+        }
+        String label = ClaudeCodeToolCatalog.fallbackDisplayName(toolName);
+        String preview;
+        if (text.isBlank() || looksLikeJsonText(text)) {
+            preview = label;
+        } else {
+            preview = label + " · " + text;
+        }
+        details.put("summary", truncate("正在调用 " + preview, 200));
+
+        String upstreamStatus = firstText(payload, "status").toLowerCase(Locale.ROOT);
+        boolean failed = FAILED_STATUS_VALUES.contains(upstreamStatus);
+        boolean terminal = failed
+                || "subagent.tool.complete".equals(normalized)
+                || "subagent.tool_complete".equals(normalized)
+                || COMPLETED_STATUS_VALUES.contains(upstreamStatus);
+        String status = terminal ? (failed ? "error" : "completed") : "running";
+        Long endedAt = terminal ? now : null;
+        String result = text.isBlank() ? null : text;
+        LinkedHashMap<String, Object> argsMap = new LinkedHashMap<>();
+        argsMap.put("tool", toolName);
+        if (!text.isBlank()) {
+            argsMap.put("preview", truncate(text, 400));
+        }
+        return new OpenAiCompatibleStreamClient.ToolCallEvent(
+                childId,
+                toolName,
+                writeQuietJson(argsMap),
+                result,
+                status,
+                terminal ? null : now,
+                endedAt,
+                details);
+    }
+
+    /**
      * 后台 {@code delegate_task} 派工完成后，把「已完成」改写为「等待子智能体」状态，
      * 避免前端过早显示成功。
      */
@@ -547,7 +621,7 @@ public final class HermesDashboardRpc {
             return null;
         }
         return new OpenAiCompatibleStreamClient.TokenUsage(
-                prompt, completion, total, window, contextUsed, contextPercent, true);
+                prompt, completion, total, window, contextUsed, contextPercent, true, false);
     }
 
     public static String deltaText(JsonNode payload) {
@@ -575,8 +649,8 @@ public final class HermesDashboardRpc {
         if (!argsText.isBlank()) {
             return argsText;
         }
-        // start 事件只有 context 时，用 context 占位摘要（完整 args 在 complete）
-        return "";
+        // start 往往只有 context；先当作调用摘要，complete 再覆盖完整 args
+        return firstText(payload, "context");
     }
 
     private static String extractResult(JsonNode payload) {
@@ -612,6 +686,9 @@ public final class HermesDashboardRpc {
     private static final Set<String> FAILED_STATUS_VALUES = Set.of(
             "error", "failed", "failure", "timeout", "timed_out",
             "cancelled", "canceled", "interrupted", "aborted", "denied", "rejected");
+
+    private static final Set<String> COMPLETED_STATUS_VALUES = Set.of(
+            "complete", "completed", "success", "succeeded", "done", "ok", "finished");
 
     private static final ObjectMapper RESULT_PROBE_MAPPER = new ObjectMapper();
 

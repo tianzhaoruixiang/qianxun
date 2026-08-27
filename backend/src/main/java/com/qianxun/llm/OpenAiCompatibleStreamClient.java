@@ -46,10 +46,11 @@ public class OpenAiCompatibleStreamClient {
             Integer contextWindow,
             Integer contextUsed,
             Double contextPercent,
-            boolean sessionSnapshot
+            boolean sessionSnapshot,
+            boolean liveOccupancy
     ) {
         public TokenUsage(Integer promptTokens, Integer completionTokens, Integer totalTokens, Integer contextWindow) {
-            this(promptTokens, completionTokens, totalTokens, contextWindow, null, null, false);
+            this(promptTokens, completionTokens, totalTokens, contextWindow, null, null, false, false);
         }
     }
 

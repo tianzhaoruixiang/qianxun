@@ -17,5 +17,9 @@ public record WelcomeBootstrapResponse(
         Map<String, String> toolDisplayNames,
         String presetChat1,
         String presetChat2,
-        String presetChat3
+        String presetChat3,
+        String officerPortrait,
+        String systemName,
+        String claudeChatModel,
+        Integer claudeChatContextWindow
 ) {}

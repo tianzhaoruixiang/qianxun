@@ -25,6 +25,9 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -48,6 +51,7 @@ class QianXunServiceChatSessionTest {
     @BeforeEach
     void setUser() {
         UserContext.set("u1", "tester", "测试");
+        lenient().when(sessionRepository.listAgentFacetsByUserId("u1")).thenReturn(List.of());
     }
 
     @AfterEach
@@ -82,7 +86,7 @@ class QianXunServiceChatSessionTest {
     @Test
     void list_legacyEmptyAgent_shouldBeDigitalOfficer() {
         Instant now = Instant.now();
-        when(sessionRepository.listByUserIdWithStatsOrderByUpdatedDesc("u1", 21, 0)).thenReturn(List.of(
+        when(sessionRepository.listByUserIdWithStatsOrderByUpdatedDesc(eq("u1"), eq(21), eq(0), any())).thenReturn(List.of(
                 stats("s1", now, 2, "hi", "", "", "", "")
         ));
         ChatSessionListResponse page = service.list(null);
@@ -99,7 +103,7 @@ class QianXunServiceChatSessionTest {
     @Test
     void list_shouldPreferLiveRegistryName() {
         Instant now = Instant.now();
-        when(sessionRepository.listByUserIdWithStatsOrderByUpdatedDesc("u1", 21, 0)).thenReturn(List.of(
+        when(sessionRepository.listByUserIdWithStatsOrderByUpdatedDesc(eq("u1"), eq(21), eq(0), any())).thenReturn(List.of(
                 stats("s2", now, 1, "x", "case-bot", "case-bot", "旧名", "")
         ));
         when(agentRegistryRepository.findByCode("case-bot")).thenReturn(Optional.of(agent("case-bot", "案件研判", "case-bot")));
@@ -109,7 +113,7 @@ class QianXunServiceChatSessionTest {
     @Test
     void list_pageTwo_shouldUseOffsetAndDetectHasMore() {
         Instant now = Instant.now();
-        when(sessionRepository.listByUserIdWithStatsOrderByUpdatedDesc("u1", 3, 2)).thenReturn(List.of(
+        when(sessionRepository.listByUserIdWithStatsOrderByUpdatedDesc(eq("u1"), eq(3), eq(2), any())).thenReturn(List.of(
                 stats("a", now, 1, "a", "", "", "", ""),
                 stats("b", now, 1, "b", "", "", "", ""),
                 stats("c", now, 1, "c", "", "", "", "")
@@ -125,7 +129,7 @@ class QianXunServiceChatSessionTest {
     @Test
     void list_defaultPageTwo_shouldOffsetByTwenty() {
         Instant now = Instant.now();
-        when(sessionRepository.listByUserIdWithStatsOrderByUpdatedDesc("u1", 21, 20)).thenReturn(List.of(
+        when(sessionRepository.listByUserIdWithStatsOrderByUpdatedDesc(eq("u1"), eq(21), eq(20), any())).thenReturn(List.of(
                 stats("p2", now, 1, "x", "", "", "", "")
         ));
         ChatSessionListResponse page = service.list(new ListSessionsRequest(2, null, null));
@@ -139,7 +143,7 @@ class QianXunServiceChatSessionTest {
     @Test
     void list_exactPageOfTwenty_shouldSetHasMoreFalse() {
         Instant now = Instant.now();
-        when(sessionRepository.listByUserIdWithStatsOrderByUpdatedDesc("u1", 21, 0)).thenReturn(List.of(
+        when(sessionRepository.listByUserIdWithStatsOrderByUpdatedDesc(eq("u1"), eq(21), eq(0), any())).thenReturn(List.of(
                 stats("only", now, 0, "", "", "", "", "")
         ));
         ChatSessionListResponse page = service.list(new ListSessionsRequest(1, 20, null));
@@ -156,7 +160,7 @@ class QianXunServiceChatSessionTest {
         for (int i = 0; i < 21; i++) {
             rows.add(stats("s" + i, now, 0, "", "", "", "", ""));
         }
-        when(sessionRepository.listByUserIdWithStatsOrderByUpdatedDesc("u1", 21, 0)).thenReturn(rows);
+        when(sessionRepository.listByUserIdWithStatsOrderByUpdatedDesc(eq("u1"), eq(21), eq(0), any())).thenReturn(rows);
         ChatSessionListResponse page = service.list(new ListSessionsRequest(1, 20, null));
         assertThat(page.hasMore()).isTrue();
         assertThat(page.items()).hasSize(20);
@@ -166,7 +170,7 @@ class QianXunServiceChatSessionTest {
     @Test
     void list_offsetTakesPrecedenceOverPage() {
         Instant now = Instant.now();
-        when(sessionRepository.listByUserIdWithStatsOrderByUpdatedDesc("u1", 11, 40)).thenReturn(List.of(
+        when(sessionRepository.listByUserIdWithStatsOrderByUpdatedDesc(eq("u1"), eq(11), eq(40), any())).thenReturn(List.of(
                 stats("z", now, 0, "", "", "", "", "")
         ));
         ChatSessionListResponse page = service.list(new ListSessionsRequest(9, 10, 40));
@@ -174,6 +178,35 @@ class QianXunServiceChatSessionTest {
         assertThat(page.page()).isEqualTo(5);
         assertThat(page.hasMore()).isFalse();
         assertThat(page.items()).hasSize(1);
+    }
+
+    @Test
+    void list_cursor_shouldIgnoreOffsetAndPassFilter() {
+        Instant now = Instant.parse("2026-08-27T00:00:00Z");
+        when(sessionRepository.listByUserIdWithStatsOrderByUpdatedDesc(eq("u1"), eq(21), eq(0), any())).thenReturn(List.of(
+                stats("older", now, 0, "", "", "", "", "")
+        ));
+        ChatSessionListResponse page = service.list(new ListSessionsRequest(
+                9, 20, 200, "案", "code:case-bot", "2026-08-27T01:00:00Z", "newer"
+        ));
+        assertThat(page.offset()).isEqualTo(0);
+        assertThat(page.hasMore()).isFalse();
+        assertThat(page.items()).extracting(ChatSessionResponse::id).containsExactly("older");
+        org.mockito.ArgumentCaptor<ChatSessionRepository.SessionListFilter> cap =
+                org.mockito.ArgumentCaptor.forClass(ChatSessionRepository.SessionListFilter.class);
+        verify(sessionRepository).listByUserIdWithStatsOrderByUpdatedDesc(eq("u1"), eq(21), eq(0), cap.capture());
+        assertThat(cap.getValue().keyword()).isEqualTo("案");
+        assertThat(cap.getValue().agentGroup()).isEqualTo("code:case-bot");
+        assertThat(cap.getValue().cursorId()).isEqualTo("newer");
+        assertThat(cap.getValue().cursorUpdatedAt()).isEqualTo(Instant.parse("2026-08-27T01:00:00Z"));
+    }
+
+    @Test
+    void agentGroupKey_shouldMatchFrontendConvention() {
+        assertThat(QianXunServiceChatSession.agentGroupKey("case-bot", "x", "案件")).isEqualTo("code:case-bot");
+        assertThat(QianXunServiceChatSession.agentGroupKey("", "default", "")).isEqualTo("__digital_officer__");
+        assertThat(QianXunServiceChatSession.agentGroupKey("", "worker", "未分类")).isEqualTo("uncat");
+        assertThat(QianXunServiceChatSession.agentGroupKey("", "Worker", "自定义")).isEqualTo("profile:worker");
     }
 
     @Test

@@ -18,6 +18,7 @@ import com.qianxun.repo.UiConfigRepository;
 import com.qianxun.security.UserRoles;
 import com.qianxun.service.ToolDisplayNames;
 import com.qianxun.service.WelcomeOfficerPresets;
+import com.qianxun.service.SystemSettingsService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -82,15 +83,15 @@ public class TiDBSchemaInitializer implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
-        int maxAttempts = 5;
+        int maxAttempts = 18;
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
             try {
                 initSchema();
                 return;
             } catch (Exception ex) {
                 if (attempt < maxAttempts) {
-                    log.warn("TiDB 初始化失败（第 {}/{} 次），10s 后重试: {}", attempt, maxAttempts, ex.getMessage());
-                    try { Thread.sleep(10_000); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+                    log.warn("TiDB 初始化失败（第 {}/{} 次），5s 后重试: {}", attempt, maxAttempts, ex.getMessage());
+                    try { Thread.sleep(5_000); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
                 } else {
                     log.error("TiDB 初始化在 {} 次重试后仍失败，应用将退出", maxAttempts);
                     throw new IllegalStateException("TiDB schema 初始化失败", ex);
@@ -132,7 +133,8 @@ public class TiDBSchemaInitializer implements ApplicationRunner {
                     `session_goal`    TEXT,
                     `created_at`      DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     `updated_at`      DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                    UNIQUE KEY `uk_id` (`id`)
+                    UNIQUE KEY `uk_id` (`id`),
+                    KEY `idx_user_updated` (`user_id`, `updated_at`, `id`)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
                 """.formatted(db));
 
@@ -152,7 +154,8 @@ public class TiDBSchemaInitializer implements ApplicationRunner {
                     `status`        VARCHAR(32)  NOT NULL DEFAULT 'completed',
                     `run_id`        VARCHAR(64)  DEFAULT NULL,
                     UNIQUE KEY `uk_id` (`id`),
-                    KEY `idx_session_id` (`session_id`)
+                    KEY `idx_session_id` (`session_id`),
+                    KEY `idx_session_created` (`session_id`, `created_at`, `id`)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
                 """.formatted(db));
 
@@ -398,8 +401,13 @@ public class TiDBSchemaInitializer implements ApplicationRunner {
         tryAlterAddIndex(db, "data_file", "idx_user_id", "KEY `idx_user_id` (`user_id`)");
         tryAlterAddIndex(db, "data_file", "uk_public_token", "UNIQUE KEY `uk_public_token` (`public_token`)");
         tryAlterAddIndex(db, "data_file", "idx_user_folder", "KEY `idx_user_folder` (`user_id`, `folder_path`(191))");
+        tryAlterAddIndex(db, "chat_session", "idx_user_updated", "KEY `idx_user_updated` (`user_id`, `updated_at`, `id`)");
+        tryAlterAddIndex(db, "chat_message", "idx_session_created", "KEY `idx_session_created` (`session_id`, `created_at`, `id`)");
 
         seedUiWelcomeAndToolsIfEmpty();
+        if (!uiConfigRepository.hasKey(SystemSettingsService.KEY_SYSTEM_NAME)) {
+            uiConfigRepository.upsert(SystemSettingsService.KEY_SYSTEM_NAME, SystemSettingsService.DEFAULT_SYSTEM_NAME);
+        }
         removePlaceholderDataFiles();
         seedDataPortraitIfEmpty();
         seedModelRegistryIfEmpty();
@@ -463,6 +471,7 @@ public class TiDBSchemaInitializer implements ApplicationRunner {
             uiConfigRepository.upsert("welcome.recommend_label", "试试这样开始：");
             uiConfigRepository.upsert("portrait.series_a_label", "数据A");
             uiConfigRepository.upsert("portrait.series_b_label", "数据B");
+            uiConfigRepository.upsert(SystemSettingsService.KEY_SYSTEM_NAME, SystemSettingsService.DEFAULT_SYSTEM_NAME);
             log.info("ui_string_config 种子数据已写入");
         }
         if (suggestedQuestionRepository.count() == 0) {

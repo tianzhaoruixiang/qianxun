@@ -608,7 +608,7 @@ qianxun.claude.append-no-mcp: QIANXUN_CLAUDE_APPEND_NO_MCP (默认 false)
 qianxun.auth.enabled: QIANXUN_AUTH_ENABLED (默认 true)
 qianxun.auth.jwt-secret: QIANXUN_JWT_SECRET
 
-# Claude 网关（docker/claudecode）
+# Claude 网关（claudecode）
 CLAUDE_GATEWAY_KEY: 必填 Bearer 鉴权（生产）
 CLAUDE_GATEWAY_ALLOW_INSECURE=true: 本地调试免鉴权（勿用于生产）""")
 

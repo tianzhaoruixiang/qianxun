@@ -14,6 +14,7 @@ import com.qianxun.web.dto.ChatSessionListResponse;
 import com.qianxun.web.dto.ChatSessionResponse;
 import com.qianxun.web.dto.CreateSessionRequest;
 import com.qianxun.web.dto.ListSessionsRequest;
+import com.qianxun.web.dto.SessionAgentFacet;
 import com.qianxun.web.dto.SessionGoalResponse;
 import com.qianxun.web.dto.UpdateSessionRequest;
 import org.springframework.http.HttpStatus;
@@ -22,6 +23,9 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
+import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -80,10 +84,19 @@ public class QianXunServiceChatSession {
     public ChatSessionListResponse list(ListSessionsRequest request) {
         String userId = UserContext.getCurrentUserId();
         int limit = resolveLimit(request);
-        int offset = resolveOffset(request, limit);
-        int page = limit <= 0 ? 1 : offset / limit + 1;
+        Instant cursorUpdatedAt = parseCursorTime(request);
+        String cursorId = request == null ? "" : trim(request.cursorId());
+        boolean useCursor = cursorUpdatedAt != null && !cursorId.isEmpty();
+        int offset = useCursor ? 0 : resolveOffset(request, limit);
+        int page = useCursor ? 1 : (limit <= 0 ? 1 : offset / limit + 1);
+        ChatSessionRepository.SessionListFilter filter = new ChatSessionRepository.SessionListFilter(
+                request == null ? "" : trim(request.keyword()),
+                request == null ? "" : trim(request.agentGroup()),
+                useCursor ? cursorUpdatedAt : null,
+                useCursor ? cursorId : ""
+        );
         List<ChatSessionRepository.ChatSessionWithStats> rows =
-                sessionRepository.listByUserIdWithStatsOrderByUpdatedDesc(userId, limit + 1, offset);
+                sessionRepository.listByUserIdWithStatsOrderByUpdatedDesc(userId, limit + 1, offset, filter);
         boolean hasMore = rows.size() > limit;
         if (hasMore) {
             rows = rows.subList(0, limit);
@@ -98,7 +111,9 @@ public class QianXunServiceChatSession {
                         preview(row.lastMessagePreview())
                 ).withStreaming(activeRunRegistry.isStreaming(row.id())))
                 .toList();
-        return new ChatSessionListResponse(items, page, limit, offset, hasMore);
+        return new ChatSessionListResponse(
+                items, page, limit, offset, hasMore, useCursor ? List.of() : listAgentFacets(userId)
+        );
     }
 
     static int resolveLimit(ListSessionsRequest request) {
@@ -117,7 +132,58 @@ public class QianXunServiceChatSession {
         if (page < 1) {
             page = 1;
         }
-        return (page - 1) * limit;
+        long raw = (long) (page - 1) * (long) limit;
+        if (raw > Integer.MAX_VALUE) {
+            return Integer.MAX_VALUE;
+        }
+        return (int) raw;
+    }
+
+    private static Instant parseCursorTime(ListSessionsRequest request) {
+        if (request == null || request.cursorUpdatedAt() == null || request.cursorUpdatedAt().isBlank()) {
+            return null;
+        }
+        try {
+            return Instant.parse(request.cursorUpdatedAt().trim()).truncatedTo(java.time.temporal.ChronoUnit.SECONDS);
+        } catch (DateTimeParseException ex) {
+            return null;
+        }
+    }
+
+    private List<SessionAgentFacet> listAgentFacets(String userId) {
+        LinkedHashMap<String, String> map = new LinkedHashMap<>();
+        map.put("__digital_officer__", SessionAgentLabels.DIGITAL_OFFICER);
+        for (ChatSessionRepository.AgentFacetRow row : sessionRepository.listAgentFacetsByUserId(userId)) {
+            String key = agentGroupKey(row.agentCode(), row.hermesProfile(), row.agentName());
+            String label = SessionAgentLabels.displayName(
+                    row.agentCode(), row.hermesProfile(), row.agentName(), lookupRegistryName(row.agentCode(), row.hermesProfile())
+            );
+            map.putIfAbsent(key, label);
+        }
+        List<SessionAgentFacet> facets = new ArrayList<>();
+        for (var e : map.entrySet()) {
+            facets.add(new SessionAgentFacet(e.getKey(), e.getValue()));
+        }
+        return facets;
+    }
+
+    static String agentGroupKey(String agentCode, String hermesProfile, String agentName) {
+        String code = trim(agentCode);
+        if (!code.isEmpty()) {
+            return "code:" + code;
+        }
+        String name = trim(agentName);
+        if (SessionAgentLabels.DIGITAL_OFFICER.equals(name) || SessionAgentLabels.isDefaultProfile(hermesProfile)) {
+            return "__digital_officer__";
+        }
+        if (SessionAgentLabels.UNCATEGORIZED.equals(name)) {
+            return "uncat";
+        }
+        String profile = trim(hermesProfile);
+        if (!profile.isEmpty()) {
+            return "profile:" + profile.toLowerCase();
+        }
+        return "__digital_officer__";
     }
 
     public ChatSessionResponse get(String id) {

@@ -1034,9 +1034,13 @@ public class HermesDashboardChatClient {
                 liveSubagentCount.updateAndGet(n -> Math.max(0, n - 1));
             }
 
-            OpenAiCompatibleStreamClient.ToolCallEvent child = HermesDashboardRpc.toSubagentEvent(type, payload);
-            if (child != null && toolListener != null) {
-                toolListener.onToolCall(child);
+            OpenAiCompatibleStreamClient.ToolCallEvent parent = HermesDashboardRpc.toSubagentEvent(type, payload);
+            if (parent != null && toolListener != null) {
+                toolListener.onToolCall(parent);
+            }
+            OpenAiCompatibleStreamClient.ToolCallEvent nested = HermesDashboardRpc.toSubagentChildToolEvent(type, payload);
+            if (nested != null && toolListener != null) {
+                toolListener.onToolCall(nested);
             }
 
             String progress = summarizeSubagentProgress(type, payload);

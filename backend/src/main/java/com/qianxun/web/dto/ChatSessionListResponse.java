@@ -7,5 +7,16 @@ public record ChatSessionListResponse(
         int page,
         int limit,
         int offset,
-        boolean hasMore
-) {}
+        boolean hasMore,
+        List<SessionAgentFacet> agentFacets
+) {
+    public ChatSessionListResponse(
+            List<ChatSessionResponse> items,
+            int page,
+            int limit,
+            int offset,
+            boolean hasMore
+    ) {
+        this(items, page, limit, offset, hasMore, List.of());
+    }
+}

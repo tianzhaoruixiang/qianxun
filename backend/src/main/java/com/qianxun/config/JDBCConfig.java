@@ -83,6 +83,9 @@ public class JDBCConfig {
             druidDataSource.setTestOnBorrow(true);
             druidDataSource.setTestWhileIdle(true);
             druidDataSource.setPoolPreparedStatements(true);
+            druidDataSource.setBreakAfterAcquireFailure(false);
+            druidDataSource.setConnectionErrorRetryAttempts(3);
+            druidDataSource.setTimeBetweenConnectErrorMillis(2000);
 
             log.info("TiDB DataSource initialized successfully at {}", tidbUrl);
             return druidDataSource;

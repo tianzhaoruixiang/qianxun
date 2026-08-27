@@ -1,8 +1,0 @@
-#!/bin/sh
-set -eu
-
-# s6 在网关进程启动前执行，直接修改其实际读取的 /opt/data。
-python3 /opt/qianxun-hermes-policy/apply-skills-policy.py \
-  --home /opt/data \
-  --policy /opt/qianxun-hermes-policy/skills-policy.yaml \
-  --marker-template /opt/qianxun-hermes-policy/.no-bundled-skills

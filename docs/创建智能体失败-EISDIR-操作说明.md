@@ -22,7 +22,7 @@
 
 5. 复制时把软链当成文件做 `copyFile`，Node 报 **`EISDIR`**。网关未捕获，返回 HTML 500。Java 按 JSON 解析，于是弹出上面那段报错。
 
-代码修复：复制模板时 **跳过符号链接**（`docker/claudecode/src/store.js` 中 `copyProfileAssets`）。软链只用于运行时扫技能，会在下次 `createProfile` 时重建。
+代码修复：复制模板时 **跳过符号链接**（`claudecode/src/store.js` 中 `copyProfileAssets`）。软链只用于运行时扫技能，会在下次 `createProfile` 时重建。
 
 ---
 
@@ -31,7 +31,7 @@
 在仓库根目录执行：
 
 ```bash
-grep -n "isSymbolicLink" docker/claudecode/src/store.js
+grep -n "isSymbolicLink" claudecode/src/store.js
 ```
 
 应能看到 `copyProfileAssets` 循环里有：
@@ -69,7 +69,7 @@ compose **没有**把 `/app` 挂进容器，只改进仓库不够，必须让 **
 ```bash
 cd /home/administrator/code/qianyu
 
-docker cp docker/claudecode/src/store.js qianxun-claude-code:/app/src/store.js
+docker cp claudecode/src/store.js qianxun-claude-code:/app/src/store.js
 
 docker exec qianxun-claude-code grep -n "e.isSymbolicLink" /app/src/store.js
 

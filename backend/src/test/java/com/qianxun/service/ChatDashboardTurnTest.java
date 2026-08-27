@@ -20,8 +20,10 @@ class ChatDashboardTurnTest {
         ChatDashboardTurn.Plan plan = ChatDashboardTurn.plan(false, true, goal, stored, stored);
         assertThat(plan.hasSlash()).isTrue();
         assertThat(plan.expectSendThenPrompt()).isTrue();
-        assertThat(plan.slashCommand()).startsWith("/goal 调研");
-        assertThat(plan.slashCommand()).contains("verify: 形成报告");
+        assertThat(plan.slashCommand()).startsWith("/goal ");
+        assertThat(plan.slashCommand()).contains("调研");
+        assertThat(plan.slashCommand()).contains("形成报告");
+        assertThat(plan.slashCommand()).doesNotContain("verify:");
         assertThat(plan.promptText()).isEqualTo("开始");
         assertThat(plan.seedHistory()).extracting(m -> m.get("content"))
                 .containsExactly("先调研竞品", "好的");

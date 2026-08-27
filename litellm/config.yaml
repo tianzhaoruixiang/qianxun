@@ -1,0 +1,116 @@
+# LiteLLM Proxy：把 Claude Agent SDK 的 Anthropic Messages 请求
+# 转发给任意 OpenAI Compatible 上游（/v1/chat/completions）。
+#
+# 较新 LiteLLM 会对 openai/ + 自定义 api_base 把 /v1/messages 改走
+# /v1/responses。内网 vLLM / 百炼 compatible-mode 只稳支持
+# chat/completions；vLLM Responses API 还会因缺少 chat_template_kwargs 直接 500。
+# 因此：supports_reasoning: false + 强制 messages/responses 都桥到 completions。
+
+model_list:
+  - model_name: openai-default
+    litellm_params: &openai_upstream
+      model: os.environ/LITELLM_UPSTREAM_MODEL
+      api_base: os.environ/OPENAI_UPSTREAM_BASE_URL
+      api_key: os.environ/OPENAI_UPSTREAM_API_KEY
+      drop_params: true
+      use_chat_completions_api: true
+    model_info: &no_reasoning
+      supports_reasoning: false
+
+  - model_name: openai-compat
+    litellm_params:
+      <<: *openai_upstream
+    model_info:
+      <<: *no_reasoning
+
+  - model_name: DeepseekV4Flash
+    litellm_params:
+      <<: *openai_upstream
+    model_info:
+      <<: *no_reasoning
+
+  - model_name: DeepSeek-V4-Flash
+    litellm_params:
+      <<: *openai_upstream
+    model_info:
+      <<: *no_reasoning
+
+  # Claude Code 会把 sonnet 展开成旗舰 id。LiteLLM /v1/models 只列出
+  # 目录里认识的 Anthropic 名（如 claude-sonnet-4-5），claude-sonnet-5 不会出现在列表里。
+  # sidecar 已钉死 4-5；下面别名仍保留，避免旧会话打到未登记 id。
+  - model_name: sonnet
+    litellm_params: { <<: *openai_upstream }
+    model_info: { <<: *no_reasoning }
+  - model_name: opus
+    litellm_params: { <<: *openai_upstream }
+    model_info: { <<: *no_reasoning }
+  - model_name: haiku
+    litellm_params: { <<: *openai_upstream }
+    model_info: { <<: *no_reasoning }
+  - model_name: fable
+    litellm_params: { <<: *openai_upstream }
+    model_info: { <<: *no_reasoning }
+  - model_name: claude-sonnet-5
+    litellm_params: { <<: *openai_upstream }
+    model_info: { <<: *no_reasoning }
+  - model_name: claude-opus-5
+    litellm_params: { <<: *openai_upstream }
+    model_info: { <<: *no_reasoning }
+  - model_name: claude-haiku-5
+    litellm_params: { <<: *openai_upstream }
+    model_info: { <<: *no_reasoning }
+  - model_name: claude-sonnet-4-5
+    litellm_params: { <<: *openai_upstream }
+    model_info: { <<: *no_reasoning }
+  - model_name: claude-sonnet-4-5-20250929
+    litellm_params: { <<: *openai_upstream }
+    model_info: { <<: *no_reasoning }
+  - model_name: claude-sonnet-4-6
+    litellm_params: { <<: *openai_upstream }
+    model_info: { <<: *no_reasoning }
+  - model_name: claude-sonnet-4-20250514
+    litellm_params: { <<: *openai_upstream }
+    model_info: { <<: *no_reasoning }
+  - model_name: claude-3-5-sonnet-latest
+    litellm_params: { <<: *openai_upstream }
+    model_info: { <<: *no_reasoning }
+  - model_name: claude-3-7-sonnet-latest
+    litellm_params: { <<: *openai_upstream }
+    model_info: { <<: *no_reasoning }
+  - model_name: claude-haiku-4-5
+    litellm_params: { <<: *openai_upstream }
+    model_info: { <<: *no_reasoning }
+  - model_name: claude-haiku-4-5-20251001
+    litellm_params: { <<: *openai_upstream }
+    model_info: { <<: *no_reasoning }
+  - model_name: claude-opus-4-6
+    litellm_params: { <<: *openai_upstream }
+    model_info: { <<: *no_reasoning }
+  - model_name: claude-opus-4-5
+    litellm_params: { <<: *openai_upstream }
+    model_info: { <<: *no_reasoning }
+  - model_name: "claude-*"
+    litellm_params: { <<: *openai_upstream }
+    model_info: { <<: *no_reasoning }
+  # 任意未知 model 名都转到同一 OpenAI Compatible 上游（litellm_params.model 仍是 LITELLM_UPSTREAM_MODEL）
+  - model_name: "*"
+    litellm_params: { <<: *openai_upstream }
+    model_info: { <<: *no_reasoning }
+
+router_settings:
+  model_group_alias:
+    anthropic/claude-sonnet-5: openai-default
+    anthropic/claude-sonnet-4-5: openai-default
+    anthropic/claude-sonnet-4-5-20250929: openai-default
+    anthropic/claude-sonnet-4-6: openai-default
+  enable_pre_call_checks: false
+
+litellm_settings:
+  drop_params: true
+  modify_params: true
+  use_chat_completions_url_for_anthropic_messages: true
+  default_fallbacks: ["openai-default"]
+  callbacks: merge_leading_system.proxy_handler_instance
+
+general_settings:
+  allow_requests_on_db_unavailable: true

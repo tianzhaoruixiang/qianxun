@@ -18,6 +18,7 @@ import {
   skillDir,
   skillsDir,
   soulMd,
+  TEMPLATE_PROFILES_ROOT,
   templateProfileHome,
   toolsetsFile,
   userRoot,
@@ -363,12 +364,26 @@ export async function publishProfileTemplate(userId, rawName) {
   return { ok: true, name, path: dest, message: "已发布平台模板" };
 }
 
-export async function listProfiles(userId, model, contextWindow) {
+async function listTemplateProfileNames() {
+  try {
+    const entries = await fs.readdir(TEMPLATE_PROFILES_ROOT, { withFileTypes: true });
+    return entries
+      .filter((e) => e.isDirectory() && !e.name.startsWith("."))
+      .map((e) => normalizeProfileName(e.name));
+  } catch {
+    return [];
+  }
+}
+
+export async function listProfiles(userId, model) {
   requireUserId(userId);
   const root = profilesRoot(userId);
   await fs.mkdir(root, { recursive: true });
   await fs.mkdir(userWorkspace(userId), { recursive: true });
   const names = new Set(["default"]);
+  for (const n of await listTemplateProfileNames()) {
+    names.add(n);
+  }
   let entries = [];
   try {
     entries = await fs.readdir(root, { withFileTypes: true });
@@ -382,13 +397,16 @@ export async function listProfiles(userId, model, contextWindow) {
   }
   const out = [];
   for (const name of names) {
+    const home = profileHome(name, userId);
+    const fallback = name === "default" ? "# default\n\n默认智能体\n" : `# ${name}\n`;
+    await seedProfileFromTemplate(home, name, fallback);
     out.push({
       name,
       description: name === "default" ? "默认智能体" : "",
       model,
       active: name === "default",
-      path: profileHome(name, userId),
-      context_window: contextWindow,
+      path: home,
+      context_window: 0,
     });
   }
   out.sort((a, b) => {

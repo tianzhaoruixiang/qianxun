@@ -4,7 +4,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.qianxun.config.QianxunProperties;
 import com.qianxun.service.ChatAgentsInvocation;
 import com.qianxun.service.ChatDashboardTurn;
+import com.qianxun.service.ChatGoalInvocation;
 import com.qianxun.service.ChatSlashCommandSupport;
+import com.qianxun.service.SystemSettingsService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -36,16 +38,19 @@ public class ClaudeCodeChatClient {
     private final HermesAgentClient hermes;
     private final ObjectMapper objectMapper;
     private final QianxunProperties properties;
+    private final SystemSettingsService systemSettings;
     private final HttpClient http;
 
     public ClaudeCodeChatClient(
             HermesAgentClient hermes,
             ObjectMapper objectMapper,
-            QianxunProperties properties
+            QianxunProperties properties,
+            SystemSettingsService systemSettings
     ) {
         this.hermes = hermes;
         this.objectMapper = objectMapper;
         this.properties = properties;
+        this.systemSettings = systemSettings;
         this.http = hermes.httpClient();
     }
 
@@ -59,7 +64,9 @@ public class ClaudeCodeChatClient {
             OpenAiCompatibleStreamClient.ToolCallListener toolListener,
             OpenAiCompatibleStreamClient.UsageListener usageListener,
             BooleanSupplier cancelled,
-            Consumer<Runnable> registerCancel
+            Consumer<Runnable> registerCancel,
+            CompactListener compactListener,
+            int contextWindow
     ) throws Exception {
         if (!properties.getClaude().isEnabled()) {
             throw new IllegalStateException("未启用 Claude Code 运行器");
@@ -78,11 +85,24 @@ public class ClaudeCodeChatClient {
         if (plan != null && plan.seedHistory() != null) {
             body.put("seedHistory", plan.seedHistory());
         }
-        body.put("model", blankOr(properties.getClaude().getChatModel(), "claude-sonnet-4-5"));
+        body.put("model", blankOr(properties.getClaude().getSdkModel(), "sonnet"));
+        body.put("upstreamModel", blankOr(systemSettings.resolvedClaudeChatModel(), ""));
+        String upstreamBase = systemSettings.resolvedOpenaiBaseUrl();
+        if (!upstreamBase.isBlank()) {
+            body.put("upstreamBaseUrl", upstreamBase);
+        }
+        String upstreamKey = systemSettings.resolvedOpenaiApiKey();
+        if (!upstreamKey.isBlank()) {
+            body.put("upstreamApiKey", upstreamKey);
+        }
         body.put("permissionMode", blankOr(properties.getClaude().getPermissionMode(), "bypassPermissions"));
         List<String> enabled = hermes.listChatGatewayEnabledToolsets(workspaceOwnerId, profile);
         if (!enabled.isEmpty()) {
             body.put("allowedToolsets", enabled);
+        }
+        int window = contextWindow > 0 ? contextWindow : 0;
+        if (window > 0) {
+            body.put("contextWindow", window);
         }
         if (!hermes.isChatMcpAllowed(workspaceOwnerId, profile)) {
             body.put("mcpDisabled", true);
@@ -150,6 +170,13 @@ public class ClaudeCodeChatClient {
                             usageListener.onUsage(r.usage());
                         }
                     }
+                    if (r.compact() != null && compactListener != null) {
+                        compactListener.onCompact(
+                                r.compact().phase(),
+                                r.compact().trigger(),
+                                r.compact().preTokens()
+                        );
+                    }
                     if (r.resultDone()) {
                         sawDone = true;
                         finishReason = r.finishReason() == null || r.finishReason().isBlank()
@@ -190,22 +217,21 @@ public class ClaudeCodeChatClient {
         String s = slash.trim();
         String lower = s.toLowerCase();
         if (lower.equals("/goal clear") || lower.startsWith("/goal clear")) {
-            return "请停止当前长程目标，之后按普通对话回答。"
-                    + (user.isBlank() ? "" : "\n\n" + user);
+            return ChatGoalInvocation.HERMES_CLEAR_COMMAND;
         }
         if (lower.equals(ChatAgentsInvocation.HERMES_COMMAND)
                 || lower.startsWith("/agents")) {
             return "请列出当前会话中的子智能体与运行中任务。若没有，请明确说明当前没有运行中的委派任务。";
         }
         if (lower.startsWith("/goal")) {
-            String goal = s.substring("/goal".length()).trim();
-            StringBuilder sb = new StringBuilder();
-            sb.append("请将以下内容作为本会话的长程目标，并开始执行。在达成成功标准前不要停止。\n");
-            sb.append(goal);
-            if (expectThenPrompt && !user.isBlank()) {
-                sb.append("\n\n用户补充：").append(user);
+            // Claude Code 官方：prompt 就是 `/goal <condition>`，会立刻开一轮并由评估器续轮。
+            // 表单中文展示不要再拼进 prompt，否则评估器看到的不是完成条件。
+            if (expectThenPrompt && !user.isBlank()
+                    && !ChatGoalInvocation.looksLikeLocalGoalDisplay(user)
+                    && !user.trim().startsWith("/goal")) {
+                return s + "\n\n" + user;
             }
-            return sb.toString();
+            return s;
         }
         if (s.startsWith("/")) {
             return s;
@@ -232,5 +258,10 @@ public class ClaudeCodeChatClient {
             return "";
         }
         return s.length() <= max ? s : s.substring(0, max);
+    }
+
+    @FunctionalInterface
+    public interface CompactListener {
+        void onCompact(String phase, String trigger, Integer preTokens);
     }
 }

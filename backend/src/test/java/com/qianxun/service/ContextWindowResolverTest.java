@@ -2,7 +2,9 @@ package com.qianxun.service;
 
 import com.qianxun.domain.ModelRegistryItem;
 import com.qianxun.llm.HermesAgentClient;
+import com.qianxun.llm.OpenAiModelsClient;
 import com.qianxun.repo.ModelRegistryRepository;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -15,7 +17,9 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -25,9 +29,21 @@ class ContextWindowResolverTest {
     private ModelRegistryRepository modelRegistryRepository;
     @Mock
     private HermesAgentClient hermesAgentClient;
+    @Mock
+    private OpenAiModelsClient openAiModelsClient;
+    @Mock
+    private SystemSettingsService systemSettingsService;
 
     @InjectMocks
     private ContextWindowResolver resolver;
+
+    @BeforeEach
+    void defaults() {
+        lenient().when(systemSettingsService.resolvedOpenaiBaseUrl()).thenReturn("");
+        lenient().when(systemSettingsService.resolvedOpenaiApiKey()).thenReturn("");
+        lenient().when(systemSettingsService.resolvedClaudeChatModel()).thenReturn("");
+        lenient().when(openAiModelsClient.findContextWindow(anyString(), anyString(), anyString())).thenReturn(0);
+    }
 
     @Test
     void unknown_shouldReturnZeroNot128k() {
@@ -41,6 +57,16 @@ class ContextWindowResolverTest {
     void shouldUseModelRegistryByCode() {
         when(modelRegistryRepository.findByCode("qwen")).thenReturn(Optional.of(model("qwen", "通义", 32768)));
         assertThat(resolver.resolve("qwen", "other", "default")).isEqualTo(32768);
+    }
+
+    @Test
+    void shouldPreferLiveUpstreamWindowOverRegistry() {
+        when(systemSettingsService.resolvedOpenaiBaseUrl()).thenReturn("http://litellm:4000/v1");
+        when(systemSettingsService.resolvedOpenaiApiKey()).thenReturn("sk");
+        when(systemSettingsService.resolvedClaudeChatModel()).thenReturn("qwen3.6-plus");
+        when(openAiModelsClient.findContextWindow(eq("http://litellm:4000/v1"), eq("sk"), eq("qwen")))
+                .thenReturn(131072);
+        assertThat(resolver.resolve("qwen", "qwen3.6-plus", "default")).isEqualTo(131072);
     }
 
     @Test
@@ -79,6 +105,16 @@ class ContextWindowResolverTest {
         when(modelRegistryRepository.findByCode("gpt")).thenReturn(Optional.of(model("gpt", "GPT", 32000)));
         assertThat(resolver.enrichHermesProfileWindow(null, "gpt")).isEqualTo(32000);
         assertThat(resolver.enrichHermesProfileWindow(64000, "gpt")).isEqualTo(64000);
+    }
+
+    @Test
+    void resolveRuntimeModelWindow_usesConfiguredChatModel() {
+        when(systemSettingsService.resolvedClaudeChatModel()).thenReturn("qwen3.6-plus");
+        when(systemSettingsService.resolvedOpenaiBaseUrl()).thenReturn("http://litellm:4000/v1");
+        when(systemSettingsService.resolvedOpenaiApiKey()).thenReturn("sk");
+        when(openAiModelsClient.findContextWindow(eq("http://litellm:4000/v1"), eq("sk"), eq("qwen3.6-plus")))
+                .thenReturn(131072);
+        assertThat(resolver.resolveRuntimeModelWindow()).isEqualTo(131072);
     }
 
     private static ModelRegistryItem model(String code, String name, int window) {

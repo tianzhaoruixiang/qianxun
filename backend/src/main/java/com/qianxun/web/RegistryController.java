@@ -210,8 +210,9 @@ public class RegistryController {
     }
 
     @Operation(summary = "创建或更新模型")
-    @PostMapping("/models/upsert")
+        @PostMapping("/models/upsert")
     public ApiResponse<ModelRegistryResponse> upsertModel(@RequestBody ApiRequest<UpsertModelRegistryRequest> request) {
+        requireAgentAdmin();
         ApiRequestSupport.applyGeneralArgument(request);
         UpsertModelRegistryRequest body = ApiRequestSupport.jsonArg(request);
         if (body == null || isBlank(body.code()) || isBlank(body.name())) {
