@@ -9,7 +9,7 @@ import {
   soulMd,
   workspace,
 } from "./paths.js";
-import { allowedClaudeTools, DEFAULT_ENABLED, disallowedClaudeTools, expandEnabledToolsets, lowerSet } from "./toolsets.js";
+import { allowedClaudeTools, DEFAULT_ENABLED, disallowedClaudeTools, disallowedClaudeToolsFromAllowlist, expandEnabledToolsets, lowerSet } from "./toolsets.js";
 import { createProfile, ensureDiscoverableSkillsLayout, listSkills, migrateLegacyClaudeHome, readToolsets } from "./store.js";
 import {
   buildSdkMcpConfig,
@@ -19,45 +19,27 @@ import {
   syncPluginsManifest,
 } from "./mcp.js";
 import { sanitizeOwnerId } from "./paths.js";
-
-const DOC_HINT = "【工作区规则】每个用户有独立 cwd，同一用户的多个会话共享该目录。"
-  + "文件/终端操作只能使用该 cwd 下的相对路径；"
-  + "不要使用绝对路径访问其它目录，不要 ls/读取父目录（..）或同级其它 qx 用户目录。"
-  + "本容器是火山 AIO 智能体沙箱：可直接运行 python / python3"
-  + "（已预装 pandas、numpy、openpyxl、python-docx、matplotlib 等），不要 pip install。"
-  + "若生成 xlsx/md/doc/docx，用 Write 或 python 写入当前 cwd（普通文件名如 report.xlsx）。"
-  + "不要编造 /QianXunService/data/files/public/ 链接，也不要把 Docker 内部主机名发给用户。"
-  + "平台会自动入库并追加可点击链接。";
-const SOUL_APPEND_MAX = 80_000;
+import { buildOfficerMcp } from "./officerMcp.js";
+import {
+  applyOfficerLeanTools,
+  officerAllowedTools,
+  officerBuiltinDelegationTools,
+  officerHint,
+} from "./officerPolicy.js";
+import { buildSystemAppend, clipSoul } from "./systemAppend.js";
 
 async function readProfileSoul(home) {
   for (const file of [claudeMd(home), soulMd(home)]) {
     try {
-      const text = (await fs.readFile(file, "utf8")).trim();
+      const text = clipSoul(await fs.readFile(file, "utf8"));
       if (text) {
-        return text.length > SOUL_APPEND_MAX ? text.slice(0, SOUL_APPEND_MAX) : text;
+        return text;
       }
     } catch {
       /* next */
     }
   }
   return "";
-}
-
-function buildSystemAppend(cwd, soul, enabledSkillInfos) {
-  const fence = `${DOC_HINT} 唯一允许的工作目录是：${cwd}。`;
-  const skills = Array.isArray(enabledSkillInfos) ? enabledSkillInfos : [];
-  const skillHint = skills.length
-    ? `\n【已启用技能】${skills.map((s) => {
-      const name = s && s.name ? String(s.name) : "";
-      const desc = s && s.description ? String(s.description).replace(/\s+/g, " ").trim() : "";
-      return desc ? `${name}（${desc}）` : name;
-    }).filter(Boolean).join("；")}。需要时调用 Skill 工具并传入对应技能名，按该技能的 SKILL.md 执行。`
-    : "";
-  if (!soul) {
-    return fence + skillHint;
-  }
-  return `【智能体灵魂】\n${soul}\n\n${fence}${skillHint}`;
 }
 
 const PROXY_ENV_KEYS = [
@@ -253,7 +235,7 @@ export function resolveAutoCompactWindow(raw) {
   return Math.max(8_000, Math.min(1_000_000, Math.round(n)));
 }
 
-function emitCompactIfNeeded(message, writeLine) {
+export function emitCompactIfNeeded(message, writeLine) {
   if (!message || typeof message !== "object" || typeof writeLine !== "function") {
     return;
   }
@@ -515,8 +497,8 @@ export async function streamTurn(body, writeLine, signal) {
     ? body.allowedToolsets
     : (gw.enabled && gw.enabled.length ? gw.enabled : DEFAULT_ENABLED);
   const enabled = expandEnabledToolsets(rawEnabled, gw.disabled || []);
-  const tools = allowedClaudeTools(enabled);
-  const disallowed = disallowedClaudeTools(enabled);
+  let tools = allowedClaudeTools(enabled);
+  let disallowed = disallowedClaudeTools(enabled);
   const skills = await listSkills(userId, profile);
   const enabledSkillInfos = skills.filter((s) => s.enabled);
   const enabledSkills = enabledSkillInfos.map((s) => s.name);
@@ -550,7 +532,18 @@ export async function streamTurn(body, writeLine, signal) {
   const upstreamBaseUrl = resolveUpstreamBaseUrl(body);
   const upstreamApiKey = resolveUpstreamApiKey(body);
   const soul = await readProfileSoul(home);
-  const append = buildSystemAppend(cwd, soul, enabledSkillInfos);
+  let append = buildSystemAppend(cwd, soul, enabledSkillInfos);
+  const officerMcp = buildOfficerMcp(body.orchestration);
+  if (officerMcp) {
+    tools = applyOfficerLeanTools(tools, { skillsOn });
+    disallowed = [...new Set([
+      ...disallowedClaudeToolsFromAllowlist(tools),
+      ...officerBuiltinDelegationTools(),
+    ])];
+    append += officerHint(body.orchestration);
+    mcpServers = { ...mcpServers, "qianxun-officer": officerMcp };
+    mcpAllowedTools = [...mcpAllowedTools, ...officerAllowedTools()];
+  }
 
   const abortController = new AbortController();
   if (signal) {

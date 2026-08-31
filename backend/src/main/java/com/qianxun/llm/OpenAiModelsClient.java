@@ -51,22 +51,38 @@ public class OpenAiModelsClient {
         if (items.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "上游 /models 未返回任何模型 id");
         }
-        return items;
+        JsonNode info = fetchJsonQuiet(modelInfoUrl(baseUrl), apiKey);
+        if (info != null) {
+            items = mergeWindows(items, parseModelInfos(info));
+        }
+        return enrichKnownWindows(items);
     }
 
     /**
-     * 对话压缩用：查当前模型在上游 /models 中声明的上下文窗口。失败返回 0，不抛给聊天主路径。
+     * 查当前模型上下文窗口：上游 /models、LiteLLM /model/info，再对常用公开模型做只读兜底。
+     * 失败返回 0，不抛给聊天主路径。
      */
     public int findContextWindow(String baseUrl, String apiKey, String modelId) {
-        if (baseUrl == null || baseUrl.isBlank() || modelId == null || modelId.isBlank()) {
+        if (modelId == null || modelId.isBlank()) {
             return 0;
         }
-        try {
-            JsonNode root = fetchModelsJson(baseUrl, apiKey);
-            return findContextWindowInList(root, modelId);
-        } catch (Exception ex) {
-            return 0;
+        if (baseUrl != null && !baseUrl.isBlank()) {
+            try {
+                JsonNode root = fetchModelsJson(baseUrl, apiKey);
+                int w = findContextWindowInList(root, modelId);
+                if (w > 0) {
+                    return w;
+                }
+                JsonNode info = fetchJsonQuiet(modelInfoUrl(baseUrl), apiKey);
+                w = findContextWindowInList(info, modelId);
+                if (w > 0) {
+                    return w;
+                }
+            } catch (Exception ex) {
+                // 走公开模型兜底
+            }
         }
+        return KnownModelContextWindows.lookup(modelId);
     }
 
     private JsonNode fetchModelsJson(String baseUrl, String apiKey) {
@@ -107,8 +123,42 @@ public class OpenAiModelsClient {
         }
     }
 
+    /** LiteLLM {@code /v1/model/info}：失败返回 null，不影响 /models 列表。 */
+    private JsonNode fetchJsonQuiet(String endpoint, String apiKey) {
+        if (endpoint == null || endpoint.isBlank()) {
+            return null;
+        }
+        String cacheKey = endpoint + "\0" + (apiKey == null ? "" : apiKey.trim());
+        CachedRoot hit = cache.get(cacheKey);
+        long now = System.currentTimeMillis();
+        if (hit != null && hit.expiresAt > now) {
+            return hit.root();
+        }
+        try {
+            HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(endpoint))
+                    .timeout(TIMEOUT)
+                    .GET()
+                    .header("Accept", "application/json");
+            if (apiKey != null && !apiKey.isBlank()) {
+                builder.header("Authorization", "Bearer " + apiKey.trim());
+            }
+            HttpResponse<String> response = http.send(builder.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                return null;
+            }
+            JsonNode root = objectMapper.readTree(response.body() == null ? "{}" : response.body());
+            cache.put(cacheKey, new CachedRoot(root, now + CACHE_TTL_MS));
+            return root;
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            return null;
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
     static String modelsUrl(String baseUrl) {
-        String b = baseUrl == null ? "" : baseUrl.trim().replaceAll("/+$", "");
+        String b = trimBase(baseUrl);
         if (b.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Base URL 不能为空");
         }
@@ -117,6 +167,25 @@ public class OpenAiModelsClient {
             return b;
         }
         return b + "/models";
+    }
+
+    static String modelInfoUrl(String baseUrl) {
+        String b = trimBase(baseUrl);
+        if (b.isEmpty()) {
+            return "";
+        }
+        String lower = b.toLowerCase(Locale.ROOT);
+        if (lower.endsWith("/model/info")) {
+            return b;
+        }
+        if (lower.endsWith("/models")) {
+            return b.substring(0, b.length() - "/models".length()) + "/model/info";
+        }
+        return b + "/model/info";
+    }
+
+    private static String trimBase(String baseUrl) {
+        return baseUrl == null ? "" : baseUrl.trim().replaceAll("/+$", "");
     }
 
     static List<String> parseModelIds(JsonNode root) {
@@ -158,7 +227,7 @@ public class OpenAiModelsClient {
             if (item == null || !item.isObject()) {
                 continue;
             }
-            if (!idsMatch(itemId(item), modelId)) {
+            if (!itemMatches(item, modelId)) {
                 continue;
             }
             int w = parseContextWindow(item);
@@ -167,6 +236,20 @@ public class OpenAiModelsClient {
             }
         }
         return 0;
+    }
+
+    static boolean itemMatches(JsonNode item, String modelId) {
+        if (idsMatch(itemId(item), modelId)) {
+            return true;
+        }
+        JsonNode params = item.get("litellm_params");
+        if (params != null && params.isObject()) {
+            JsonNode nested = params.get("model");
+            if (nested != null && nested.isTextual() && idsMatch(nested.asText(), modelId)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     static int parseContextWindow(JsonNode item) {
@@ -194,12 +277,13 @@ public class OpenAiModelsClient {
     }
 
     private static String itemId(JsonNode item) {
-        JsonNode id = item.get("id");
-        if (id != null && id.isTextual()) {
-            return id.asText();
+        for (String field : new String[] {"id", "model_name", "name"}) {
+            JsonNode v = item.get(field);
+            if (v != null && v.isTextual() && !v.asText().isBlank()) {
+                return v.asText();
+            }
         }
-        JsonNode name = item.get("name");
-        return name != null && name.isTextual() ? name.asText() : "";
+        return "";
     }
 
     static boolean idsMatch(String listed, String wanted) {
@@ -231,12 +315,32 @@ public class OpenAiModelsClient {
             return 0;
         }
         for (String f : fields) {
-            JsonNode v = n.get(f);
-            if (v != null && v.isNumber()) {
-                int i = v.asInt();
-                if (i > 0) {
-                    return i;
-                }
+            int i = asPositiveInt(n.get(f));
+            if (i > 0) {
+                return i;
+            }
+        }
+        return 0;
+    }
+
+    private static int asPositiveInt(JsonNode v) {
+        if (v == null || v.isNull()) {
+            return 0;
+        }
+        if (v.isNumber()) {
+            int i = v.asInt();
+            return i > 0 ? i : 0;
+        }
+        if (v.isTextual()) {
+            String s = v.asText().trim().replace("_", "").replace(",", "");
+            if (s.isEmpty()) {
+                return 0;
+            }
+            try {
+                int i = Integer.parseInt(s);
+                return i > 0 ? i : 0;
+            } catch (NumberFormatException ex) {
+                return 0;
             }
         }
         return 0;
@@ -253,13 +357,7 @@ public class OpenAiModelsClient {
             if (item.isTextual()) {
                 addInfo(seen, items, item.asText(), 0);
             } else if (item.isObject()) {
-                JsonNode id = item.get("id");
-                String raw = id != null && id.isTextual() ? id.asText() : "";
-                if (raw.isEmpty()) {
-                    JsonNode name = item.get("name");
-                    raw = name != null && name.isTextual() ? name.asText() : "";
-                }
-                addInfo(seen, items, raw, parseContextWindow(item));
+                addInfo(seen, items, itemId(item), parseContextWindow(item));
             }
         }
     }
@@ -272,7 +370,37 @@ public class OpenAiModelsClient {
         if (v.isEmpty() || !seen.add(v)) {
             return;
         }
-        items.add(new OpenAiModelInfo(v, contextWindow));
+        int window = contextWindow > 0 ? contextWindow : KnownModelContextWindows.lookup(v);
+        items.add(new OpenAiModelInfo(v, window));
+    }
+
+    static List<OpenAiModelInfo> mergeWindows(List<OpenAiModelInfo> primary, List<OpenAiModelInfo> extra) {
+        if (extra == null || extra.isEmpty()) {
+            return primary;
+        }
+        List<OpenAiModelInfo> out = new ArrayList<>(primary.size());
+        for (OpenAiModelInfo item : primary) {
+            int w = item.contextWindow();
+            if (w <= 0) {
+                for (OpenAiModelInfo other : extra) {
+                    if (idsMatch(item.id(), other.id()) && other.contextWindow() > 0) {
+                        w = other.contextWindow();
+                        break;
+                    }
+                }
+            }
+            out.add(w == item.contextWindow() ? item : new OpenAiModelInfo(item.id(), w));
+        }
+        return List.copyOf(out);
+    }
+
+    static List<OpenAiModelInfo> enrichKnownWindows(List<OpenAiModelInfo> items) {
+        List<OpenAiModelInfo> out = new ArrayList<>(items.size());
+        for (OpenAiModelInfo item : items) {
+            int w = item.contextWindow() > 0 ? item.contextWindow() : KnownModelContextWindows.lookup(item.id());
+            out.add(w == item.contextWindow() ? item : new OpenAiModelInfo(item.id(), w));
+        }
+        return List.copyOf(out);
     }
 
     private static String brief(String message) {

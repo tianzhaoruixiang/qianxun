@@ -272,6 +272,13 @@ public class QianXunServiceChatSession {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "会话不存在"));
     }
 
+    public void insertInternal(ChatSession session) {
+        if (session == null) {
+            return;
+        }
+        sessionRepository.insert(session);
+    }
+
     /**
      * 首轮对话写入当前智能体；已有绑定则跳过。
      */

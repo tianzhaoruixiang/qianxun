@@ -3,6 +3,7 @@ package com.qianxun.service;
 import com.qianxun.context.UserContext;
 import com.qianxun.domain.ModelRegistryItem;
 import com.qianxun.llm.HermesAgentClient;
+import com.qianxun.llm.KnownModelContextWindows;
 import com.qianxun.llm.OpenAiModelsClient;
 import com.qianxun.repo.ModelRegistryRepository;
 import org.slf4j.Logger;
@@ -81,9 +82,19 @@ public class ContextWindowResolver {
             return fromProfile;
         }
         if (isGatewayStubModel(modelCode)) {
-            return windowFromRegistry(modelCode);
+            int stub = windowFromRegistry(modelCode);
+            if (stub > 0) {
+                return stub;
+            }
         }
-        return 0;
+        for (String id : ids) {
+            int known = KnownModelContextWindows.lookup(id);
+            if (known > 0) {
+                return known;
+            }
+        }
+        int knownCode = KnownModelContextWindows.lookup(modelCode);
+        return knownCode > 0 ? knownCode : KnownModelContextWindows.lookup(upstreamModel);
     }
 
     /** 列表/展示用：profile 自带窗口，否则按运行时模型解析（上游 /models 优先）。 */

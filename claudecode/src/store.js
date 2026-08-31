@@ -19,6 +19,7 @@ import {
   skillsDir,
   soulMd,
   TEMPLATE_PROFILES_ROOT,
+  bundledProfileHome,
   templateProfileHome,
   toolsetsFile,
   userRoot,
@@ -310,45 +311,131 @@ async function publishProfileTemplateFrom(userId, profileName) {
   return dest;
 }
 
-async function seedSoulFromTemplate(userHome, name, fallback) {
+export function isStubSoul(text) {
+  const t = String(text || "").trim();
+  if (!t) {
+    return true;
+  }
+  if (isStockOfficerSoulV1(t)) {
+    return false;
+  }
+  if (t.length > 400) {
+    return false;
+  }
+  const lower = t.toLowerCase();
+  if (/^#\s*default\s*$/m.test(t) && t.length < 80) {
+    return true;
+  }
+  if (lower.includes("默认智能体") && t.length < 80) {
+    return true;
+  }
+  if (/^#\s*default\s*$/i.test(t.split("\n")[0] || "") && !t.includes("数智干警")) {
+    return true;
+  }
+  return false;
+}
+
+/** 旧版内置人设（长文+委派细则表），可被精简稿替换；用户改过的不匹配。 */
+export function isStockOfficerSoulV1(text) {
+  const t = String(text || "").trim();
+  if (t.length < 1400 || t.length > 2800) {
+    return false;
+  }
+  return t.includes("你不是百科问答框，也不是某一个专业岗位本身")
+    && t.includes("### 什么时候自己做、什么时候委派")
+    && t.includes("把 Docker 主机名、内部 URL、其他用户路径告诉用户");
+}
+
+export function isReplaceableOfficerSoul(text) {
+  return isStubSoul(text) || isStockOfficerSoulV1(text);
+}
+
+export function personalizeOfficerSoul(text, userId) {
+  const uid = String(userId || "").trim() || "unknown";
+  return String(text || "").replaceAll("{{USER_ID}}", uid);
+}
+
+async function readSoulFile(file) {
   try {
-    const existing = (await fs.readFile(claudeMd(userHome), "utf8")).trim();
-    if (existing) {
-      return;
-    }
+    const text = (await fs.readFile(file, "utf8")).trim();
+    return text || "";
   } catch {
-    /* missing */
-  }
-  const tpl = templateProfileHome(name);
-  for (const file of [claudeMd(tpl), soulMd(tpl)]) {
-    try {
-      const text = (await fs.readFile(file, "utf8")).trim();
-      if (text) {
-        await fs.mkdir(userHome, { recursive: true });
-        await fs.writeFile(claudeMd(userHome), text, "utf8");
-        await fs.writeFile(soulMd(userHome), text, "utf8");
-        return;
-      }
-    } catch {
-      /* next */
-    }
-  }
-  if (fallback) {
-    await fs.mkdir(userHome, { recursive: true });
-    await fs.writeFile(claudeMd(userHome), fallback, "utf8");
-    await fs.writeFile(soulMd(userHome), fallback, "utf8");
+    return "";
   }
 }
 
-async function seedProfileFromTemplate(userHome, profileName, fallbackSoul) {
-  const tpl = templateProfileHome(profileName);
+async function readBundledOfficerSoul() {
+  const home = bundledProfileHome("default");
+  for (const file of [claudeMd(home), soulMd(home)]) {
+    const text = await readSoulFile(file);
+    if (text) {
+      return text;
+    }
+  }
+  return "";
+}
+
+/** 把镜像内置的数智干警模板补到平台 `_templates/profiles/default`（不覆盖管理员已改过的灵魂）。 */
+async function ensurePlatformDefaultTemplate() {
+  const bundled = bundledProfileHome("default");
+  const dest = templateProfileHome("default");
+  await copyProfileAssets(bundled, dest, { skipExisting: true });
+  const bundledSoul = await readBundledOfficerSoul();
+  if (!bundledSoul) {
+    return;
+  }
+  const current = (await readSoulFile(claudeMd(dest))) || (await readSoulFile(soulMd(dest)));
+  if (isReplaceableOfficerSoul(current)) {
+    await fs.mkdir(dest, { recursive: true });
+    await fs.writeFile(claudeMd(dest), bundledSoul, "utf8");
+    await fs.writeFile(soulMd(dest), bundledSoul, "utf8");
+  }
+}
+
+async function seedSoulFromTemplate(userHome, name, fallback, userId) {
+  const existing = (await readSoulFile(claudeMd(userHome))) || (await readSoulFile(soulMd(userHome)));
+  const shouldWrite = isReplaceableOfficerSoul(existing);
+  if (!shouldWrite) {
+    return;
+  }
+  let text = "";
+  const tpl = templateProfileHome(name);
+  for (const file of [claudeMd(tpl), soulMd(tpl)]) {
+    text = await readSoulFile(file);
+    if (text) {
+      break;
+    }
+  }
+  if (!text && name === "default") {
+    text = await readBundledOfficerSoul();
+  }
+  if (!text) {
+    text = fallback || "";
+  }
+  if (!text) {
+    return;
+  }
+  if (name === "default") {
+    text = personalizeOfficerSoul(text, userId);
+  }
+  await fs.mkdir(userHome, { recursive: true });
+  await fs.writeFile(claudeMd(userHome), text, "utf8");
+  await fs.writeFile(soulMd(userHome), text, "utf8");
+}
+
+async function seedProfileFromTemplate(userHome, profileName, fallbackSoul, userId) {
+  const name = normalizeProfileName(profileName);
+  if (name === "default") {
+    await ensurePlatformDefaultTemplate();
+  }
+  const tpl = templateProfileHome(name);
   try {
     await fs.access(tpl);
     await copyProfileAssets(tpl, userHome, { skipExisting: true });
   } catch {
     /* 尚无平台模板 */
   }
-  await seedSoulFromTemplate(userHome, profileName, fallbackSoul);
+  await seedSoulFromTemplate(userHome, name, fallbackSoul, userId);
 }
 
 export async function publishProfileTemplate(userId, rawName) {
@@ -398,11 +485,13 @@ export async function listProfiles(userId, model) {
   const out = [];
   for (const name of names) {
     const home = profileHome(name, userId);
-    const fallback = name === "default" ? "# default\n\n默认智能体\n" : `# ${name}\n`;
-    await seedProfileFromTemplate(home, name, fallback);
+    const fallback = name === "default"
+      ? personalizeOfficerSoul(await readBundledOfficerSoul(), userId) || "# 数智干警\n"
+      : `# ${name}\n`;
+    await seedProfileFromTemplate(home, name, fallback, userId);
     out.push({
       name,
-      description: name === "default" ? "默认智能体" : "",
+      description: name === "default" ? "数智干警" : "",
       model,
       active: name === "default",
       path: home,
@@ -437,8 +526,11 @@ export async function createProfile(userId, rawName, description) {
   await migrateLegacyClaudeHome(home);
   await fs.mkdir(userWorkspace(userId), { recursive: true });
   const desc = (description || "").trim();
-  const fallback = desc ? `# ${profileName}\n\n${desc}\n` : `# ${profileName}\n`;
-  await seedProfileFromTemplate(home, profileName, fallback);
+  const bundledOfficer = profileName === "default" ? await readBundledOfficerSoul() : "";
+  const fallback = profileName === "default"
+    ? (bundledOfficer ? personalizeOfficerSoul(bundledOfficer, userId) : "# 数智干警\n")
+    : (desc ? `# ${profileName}\n\n${desc}\n` : `# ${profileName}\n`);
+  await seedProfileFromTemplate(home, profileName, fallback, userId);
   try {
     await fs.access(toolsetsFile(home));
   } catch {
@@ -481,7 +573,10 @@ export async function putSoul(userId, rawName, content) {
   await fs.mkdir(home, { recursive: true });
   await fs.writeFile(claudeMd(home), text, "utf8");
   await fs.writeFile(soulMd(home), text, "utf8");
-  await publishProfileTemplateFrom(userId, name);
+  // 数智干警 default 是每用户一份人设，写入不覆盖平台模板；专业智能体仍发布模板供其他用户首次复制。
+  if (name !== "default") {
+    await publishProfileTemplateFrom(userId, name);
+  }
   return { ok: true, content: text, exists: true, message: "已写入 CLAUDE.md" };
 }
 

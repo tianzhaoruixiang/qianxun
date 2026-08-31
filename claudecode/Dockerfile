@@ -24,6 +24,7 @@ WORKDIR /app
 COPY package.json ./
 COPY --from=npm-deps /app/node_modules ./node_modules
 COPY src ./src
+COPY templates ./templates
 COPY supervisord.qianxun.conf /opt/gem/supervisord/supervisord.qianxun.conf
 COPY disable-aio-browser.sh /opt/gem/disable-aio-browser.sh
 RUN chmod +x /opt/gem/disable-aio-browser.sh \

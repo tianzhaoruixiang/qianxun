@@ -210,7 +210,8 @@ cd docker && ./bin/down.sh && ./bin/up.sh
 ### Claude Code sidecar
 - **聊天**：后端 `POST {QIANXUN_CLAUDE_BASE_URL}/v1/agent/stream`，响应 `application/x-ndjson`，映射到现有 SSE（`token` / `tool` / `usage`）。
 - **会话续聊**：SDK `resume` session id 存在工作区 `.qianxun/claude-sessions/`，不靠长连接。
-- **管理面**：profile / `CLAUDE.md`（兼写 `SOUL.md`）/ 技能 / 工具集走 REST；默认工具集 `web, file, terminal, code_execution, delegation`。
+- **管理面**：profile / `CLAUDE.md`（兼写 `SOUL.md`）/ 技能 / 工具集走 REST。
+- **数智干警**：镜像内置 `claudecode/templates/profiles/default/CLAUDE.md`。每个用户在 `/opt/data/{userId}/profiles/default/` 有独立副本（`{{USER_ID}}` 会替换成该用户 id）。平台模板在 `/opt/data/_templates/profiles/default/`；仅当灵魂仍是占位文案时才会用内置稿覆盖，不冲掉管理员或用户已改过的人设。
 - **密钥**：视 `CLAUDE_UPSTREAM_MODE` 注入；可选 `CLAUDE_GATEWAY_KEY` 作为内网 Bearer。
 - **权限**：当前 `bypassPermissions` + `allowedTools`。
 - 路径：默认 profile `/opt/data`，命名 profile `/opt/data/profiles/{name}`，用户工作区 `{home}/workspace/qx/{userId}`。

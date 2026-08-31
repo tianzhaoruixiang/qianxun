@@ -50,4 +50,10 @@ class ClaudeCodeChatClientTest {
     void buildPrompt_shouldReturnEmptyForNullPlan() {
         assertThat(ClaudeCodeChatClient.buildPrompt(null, "resume")).isEmpty();
     }
+
+    @Test
+    void buildPrompt_shouldPassThroughCompactSlash() {
+        ChatDashboardTurn.Plan plan = new ChatDashboardTurn.Plan("/compact", false, "/compact", List.of());
+        assertThat(ClaudeCodeChatClient.buildPrompt(plan, "")).isEqualTo("/compact");
+    }
 }

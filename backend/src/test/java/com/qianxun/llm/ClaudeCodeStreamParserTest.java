@@ -45,6 +45,19 @@ class ClaudeCodeStreamParserTest {
     }
 
     @Test
+    void assistant_shouldHideOfficerDelegateToolUse() throws Exception {
+        ClaudeCodeStreamParser.ParseResult r = parser.accept("""
+                {"type":"assistant","session_id":"s","message":{"content":[
+                  {"type":"tool_use","id":"t1","name":"mcp__qianxun-officer__delegate_to_agent",
+                   "input":{"agentCode":"baoxiaozhushou","message":"报销"}}
+                ]}}
+                """);
+        assertThat(r.tools()).isEmpty();
+        assertThat(ClaudeCodeStreamParser.isOfficerMcpTool("delegate_to_agent")).isTrue();
+        assertThat(ClaudeCodeStreamParser.isOfficerMcpTool("Agent")).isFalse();
+    }
+
+    @Test
     void streamEvent_shouldEmitToolUseOnContentBlockStart() throws Exception {
         ClaudeCodeStreamParser.ParseResult r = parser.accept("""
                 {"type":"stream_event","session_id":"s","event":{"type":"content_block_start","content_block":{

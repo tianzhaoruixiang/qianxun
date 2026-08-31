@@ -21,8 +21,10 @@ import com.qianxun.storage.FilePublicLinks;
 import com.qianxun.storage.HermesGeneratedDocuments;
 import com.qianxun.storage.UserDocumentStore;
 import com.qianxun.service.stream.ActiveRunRegistry;
+import com.qianxun.service.stream.AgentTask;
 import com.qianxun.service.stream.ChatRun;
 import org.slf4j.Logger;
+import org.springframework.context.annotation.Lazy;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -61,6 +63,7 @@ public class QianXunServiceChatStream {
     private final ActiveRunRegistry activeRunRegistry;
     private final HermesLiveTranscriptService hermesLiveTranscriptService;
     private final SystemSettingsService systemSettingsService;
+    private final AgentTaskService agentTaskService;
 
     public QianXunServiceChatStream(
             QianXunServiceChatSession sessionService,
@@ -80,7 +83,8 @@ public class QianXunServiceChatStream {
             ClaudeCodeChatClient claudeCodeChatClient,
             ActiveRunRegistry activeRunRegistry,
             HermesLiveTranscriptService hermesLiveTranscriptService,
-            SystemSettingsService systemSettingsService
+            SystemSettingsService systemSettingsService,
+            @Lazy AgentTaskService agentTaskService
     ) {
         this.sessionService = sessionService;
         this.openAiClient = openAiClient;
@@ -100,6 +104,7 @@ public class QianXunServiceChatStream {
         this.activeRunRegistry = activeRunRegistry;
         this.hermesLiveTranscriptService = hermesLiveTranscriptService;
         this.systemSettingsService = systemSettingsService;
+        this.agentTaskService = agentTaskService;
     }
 
     public void streamAnswer(
@@ -291,7 +296,7 @@ public class QianXunServiceChatStream {
                 }
             }
             if (!agentsStatusFlag) {
-                generateAndSendSuggestions(ctx, history, storedUserContent, modelCode, useMock);
+                generateAndSendSuggestions(ctx, history, storedUserContent, modelCode);
             }
             saveAndComplete(ctx);
 
@@ -336,6 +341,7 @@ public class QianXunServiceChatStream {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "无权停止该会话输出");
         }
         run.requestCancel();
+        agentTaskService.cancelByParentRun(run.runId());
     }
 
     // ── Token 路由 ─────────────────────────────────────────────────────────────
@@ -929,7 +935,7 @@ public class QianXunServiceChatStream {
         if (baseUrl.toLowerCase().contains("moonshot.cn")) {
             return coalesce(System.getenv("KIMI_API_KEY"), properties.getLlm().getApiKey());
         }
-        return trim(properties.getLlm().getApiKey());
+        return coalesce(properties.getLlm().getApiKey(), systemSettingsService.resolvedOpenaiApiKey());
     }
 
     /**
@@ -1151,6 +1157,33 @@ public class QianXunServiceChatStream {
         return useMock;
     }
 
+    private ClaudeCodeChatClient.OfficerOrchestration resolveOfficerOrchestration(StreamContext ctx, String sessionId) {
+        if (AgentTask.isTaskSession(sessionId)) {
+            return null;
+        }
+        if (ctx.run().agentCode() != null && !ctx.run().agentCode().isBlank()) {
+            return null;
+        }
+        String base = properties.getClaude().getOrchestrationBaseUrl();
+        String token = com.qianxun.security.BearerTokenHolder.get();
+        if (base == null || base.isBlank() || token == null || token.isBlank()) {
+            return null;
+        }
+        List<Map<String, String>> agents = new ArrayList<>();
+        for (AgentRegistryItem item : agentRegistryRepository.list(true)) {
+            LinkedHashMap<String, String> row = new LinkedHashMap<>();
+            row.put("code", item.code() == null ? "" : item.code());
+            row.put("name", item.name() == null ? "" : item.name());
+            agents.add(row);
+        }
+        String origin = base.trim();
+        if (origin.endsWith("/")) {
+            origin = origin.substring(0, origin.length() - 1);
+        }
+        return new ClaudeCodeChatClient.OfficerOrchestration(
+                origin, token, ctx.run().runId(), sessionId, agents);
+    }
+
     private void callLlmStream(
             StreamContext ctx,
             List<Map<String, String>> llmMessages,
@@ -1188,7 +1221,8 @@ public class QianXunServiceChatStream {
                     ctx.run()::isCancelRequested,
                     abort -> ctx.run().onInterrupt(abort),
                     (phase, trigger, preTokens) -> sendCompactEvent(ctx, phase, trigger, preTokens),
-                    contextWindow
+                    contextWindow,
+                    resolveOfficerOrchestration(ctx, sessionId)
             );
             applyStreamMeta(ctx, streamMeta, llmStart, contextWindow);
         } else {
@@ -1247,16 +1281,19 @@ public class QianXunServiceChatStream {
             StreamContext ctx,
             List<ChatMessage> history,
             String userContent,
-            String modelCode,
-            boolean useMock
+            String modelCode
     ) {
         List<String> items;
         try {
-            items = useMock
-                    ? defaultNextStepSuggestions(userContent)
-                    : askLlmForNextStepSuggestions(ctx, history, userContent, modelCode);
+            ChatEndpoint endpoint = resolveSuggestionEndpoint(modelCode);
+            if (endpoint == null) {
+                log.debug("下一步建议无可用注册模型，使用模板兜底");
+                items = defaultNextStepSuggestions(userContent);
+            } else {
+                items = askLlmForNextStepSuggestions(ctx, history, userContent, endpoint);
+            }
         } catch (Exception ex) {
-            log.debug("下一步建议生成失败（忽略）: {}", ex.toString());
+            log.warn("下一步建议生成失败（改用模板）: {}", ex.toString());
             items = defaultNextStepSuggestions(userContent);
         }
         if (items == null || items.isEmpty()) {
@@ -1267,16 +1304,15 @@ public class QianXunServiceChatStream {
     }
 
     /**
-     * 用会话历史 + 本轮回答，经智能体（Hermes）OpenAI 兼容短请求提取下一步建议。
-     * 不绑 profile Dashboard 长对话；优先 hermes.base-url，否则回退 qianxun.llm.*。
+     * 用会话历史 + 本轮回答，经注册表中的 OpenAI 兼容模型提取下一步建议。
+     * 与智能体长对话（Claude Code）解耦，避免把 {@code claude-code} 当成 HTTP 地址。
      */
     private List<String> askLlmForNextStepSuggestions(
             StreamContext ctx,
             List<ChatMessage> history,
             String userContent,
-            String modelCode
+            ChatEndpoint endpoint
     ) throws Exception {
-        ChatEndpoint endpoint = resolveSuggestionEndpoint(modelCode);
         String transcript = buildSuggestionTranscript(history, ctx.responseText.toString());
         if (transcript.isBlank()) {
             return defaultNextStepSuggestions(userContent);
@@ -1299,6 +1335,7 @@ public class QianXunServiceChatStream {
                 "content", "你只输出 JSON 字符串数组，例如 [\"……\",\"……\",\"……\"]。不要工具调用，不要解释。"
         ));
         messages.add(Map.of("role", "user", "content", prompt));
+        log.info("下一步建议调用注册模型 model={} baseUrl={}", endpoint.model(), endpoint.baseUrl());
         String raw = openAiClient.completeChat(
                 endpoint.baseUrl(), endpoint.apiKey(), endpoint.model(),
                 messages, 0.35, java.time.Duration.ofSeconds(20)
@@ -1308,33 +1345,73 @@ public class QianXunServiceChatStream {
     }
 
     /**
-     * 下一步建议专用端点：短请求。智能体长对话走 Claude Code；建议仍用 OpenAI 兼容网关。
+     * 下一步建议端点：当前选中的注册模型优先，否则取第一条可用的 OpenAI 兼容注册项，
+     * 再回退系统设置中的上游 OpenAI / {@code qianxun.llm}。
      */
     private ChatEndpoint resolveSuggestionEndpoint(String selectedModelCode) {
+        ChatEndpoint selected = suggestionEndpointFromRegistryCode(selectedModelCode);
+        if (selected != null) {
+            return selected;
+        }
+        for (ModelRegistryItem item : modelRegistryRepository.list(true)) {
+            ChatEndpoint fromList = suggestionEndpointFromRegistry(item);
+            if (fromList != null) {
+                return fromList;
+            }
+        }
+        String upstreamBase = trim(systemSettingsService.resolvedOpenaiBaseUrl());
+        String upstreamKey = trim(systemSettingsService.resolvedOpenaiApiKey());
+        if (isOpenAiCompatibleHttpBase(upstreamBase) && !upstreamKey.isEmpty()) {
+            return new ChatEndpoint(
+                    upstreamBase,
+                    upstreamKey,
+                    blankOrDefault(systemSettingsService.resolvedClaudeChatModel(), "gpt-4o-mini")
+            );
+        }
         QianxunProperties.Llm llm = properties.getLlm();
         String llmBase = trim(llm.getBaseUrl());
         String llmKey = llm.getApiKey() == null ? "" : llm.getApiKey().trim();
-        if (!llmBase.isBlank() && !llmKey.isEmpty()) {
+        if (isOpenAiCompatibleHttpBase(llmBase) && !llmKey.isEmpty()) {
             return new ChatEndpoint(llmBase, llmKey, blankOrDefault(llm.getModel(), "gpt-4o-mini"));
         }
-        if (properties.isAgentRunnerEnabled()) {
-            QianxunProperties.Claude claude = properties.getClaude();
-            return new ChatEndpoint(
-                    "claude-code",
-                    claude.getApiKey(),
-                    blankOrDefault(systemSettingsService.resolvedClaudeChatModel(), "claude-sonnet-4-5")
-            );
+        return null;
+    }
+
+    private ChatEndpoint suggestionEndpointFromRegistryCode(String modelCode) {
+        if (modelCode == null || modelCode.isBlank()) {
+            return null;
         }
-        if (selectedModelCode != null && !selectedModelCode.isBlank()) {
-            var selected = modelRegistryRepository.findByCode(selectedModelCode.trim());
-            if (selected.isPresent() && selected.get().enabled()) {
-                ChatEndpoint fromRegistry = endpointFromRegistryModel(selected.get());
-                if (!fromRegistry.baseUrl().isBlank() && !trim(fromRegistry.apiKey()).isEmpty()) {
-                    return fromRegistry;
-                }
-            }
+        return modelRegistryRepository.findByCode(modelCode.trim())
+                .filter(ModelRegistryItem::enabled)
+                .map(this::suggestionEndpointFromRegistry)
+                .orElse(null);
+    }
+
+    private ChatEndpoint suggestionEndpointFromRegistry(ModelRegistryItem item) {
+        if (item == null) {
+            return null;
         }
-        return resolveChatEndpoint(selectedModelCode, "");
+        ChatEndpoint fromRegistry = endpointFromRegistryModel(item);
+        if (!isOpenAiCompatibleHttpBase(fromRegistry.baseUrl()) || trim(fromRegistry.apiKey()).isEmpty()) {
+            return null;
+        }
+        return fromRegistry;
+    }
+
+    /** 可走 /chat/completions 的 HTTP 地址；排除 Claude Code 占位符。 */
+    static boolean isOpenAiCompatibleHttpBase(String baseUrl) {
+        if (baseUrl == null) {
+            return false;
+        }
+        String u = baseUrl.trim();
+        if (u.isEmpty()) {
+            return false;
+        }
+        String lower = u.toLowerCase();
+        if (lower.equals("claude-code") || lower.startsWith("claude-code/")) {
+            return false;
+        }
+        return lower.startsWith("http://") || lower.startsWith("https://");
     }
 
     /** 取最近若干轮 user/assistant，并附上本轮助手回答（尚未落库）。 */
@@ -1688,6 +1765,7 @@ public class QianXunServiceChatStream {
     }
 
     private void handleStreamCancelled(StreamContext ctx, long totalStart) {
+        agentTaskService.cancelByParentRun(ctx.run().runId());
         log.info("流式问答已取消 session={} run={}",
                 ctx.logBuilder().build().sessionId(), ctx.run().runId());
         String answer = ctx.responseText.toString();

@@ -52,6 +52,7 @@ public final class ClaudeCodeToolCatalog {
         add("ListAgents", "列出智能体", "agent", n += 10);
         add("TeamCreate", "创建智能体团队", "agent", n += 10);
         add("TeamDelete", "删除智能体团队", "agent", n += 10);
+        add("delegate_to_agent", "委派专业智能体", "agent", n += 10);
 
         // ── 任务清单 ──
         add("TodoWrite", "任务清单", "todo", n += 10);

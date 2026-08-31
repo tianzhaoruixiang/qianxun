@@ -60,6 +60,13 @@ public class ActiveRunRegistry {
         return findBySession(sessionId).filter(ChatRun::isRunning);
     }
 
+    public Optional<ChatRun> findByRunId(String runId) {
+        if (runId == null || runId.isBlank()) {
+            return Optional.empty();
+        }
+        return bySession.values().stream().filter(r -> runId.equals(r.runId())).findFirst();
+    }
+
     public boolean isStreaming(String sessionId) {
         return findRunning(sessionId).isPresent();
     }

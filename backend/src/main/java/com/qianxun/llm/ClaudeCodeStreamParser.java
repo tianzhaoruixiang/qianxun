@@ -8,6 +8,7 @@ import com.qianxun.llm.OpenAiCompatibleStreamClient.ToolCallEvent;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -118,6 +119,9 @@ public final class ClaudeCodeStreamParser {
             if ("tool_use".equals(text(block, "type"))) {
                 String id = firstNonBlank(text(block, "id"), text(block, "tool_use_id"));
                 String name = firstNonBlank(text(block, "name"), "tool");
+                if (isOfficerMcpTool(name) && parentToolUseId.isBlank()) {
+                    return new ParseResult("", List.of(), null, sessionId, false, "", "");
+                }
                 String args = stringify(block.get("input"));
                 return new ParseResult("", List.of(toolUse(id, name, args, parentToolUseId)),
                         null, sessionId, false, "", "");
@@ -166,6 +170,9 @@ public final class ClaudeCodeStreamParser {
                 } else if ("tool_use".equals(bType)) {
                     String id = firstNonBlank(text(block, "id"), text(block, "tool_use_id"));
                     String name = firstNonBlank(text(block, "name"), "tool");
+                    if (isOfficerMcpTool(name) && parentToolUseId.isBlank()) {
+                        continue;
+                    }
                     String args = stringify(block.get("input"));
                     tools.add(toolUse(id, name, args, parentToolUseId));
                 }
@@ -346,6 +353,23 @@ public final class ClaudeCodeStreamParser {
             return firstNonBlank(text(event, "parent_tool_use_id"), text(event, "parentToolUseId"));
         }
         return "";
+    }
+
+    /**
+     * 干警 MCP 委派由 {@code AgentTaskService} 投影专业智能体卡片；
+     * 若再把 SDK 的 tool_use 当成子智能体，前端会多出一张「墨川小助手」。
+     */
+    static boolean isOfficerMcpTool(String name) {
+        if (name == null || name.isBlank()) {
+            return false;
+        }
+        String n = name.trim().toLowerCase(Locale.ROOT);
+        if (n.contains("qianxun-officer")) {
+            return true;
+        }
+        return "delegate_to_agent".equals(n)
+                || "get_agent_task".equals(n)
+                || "cancel_agent_task".equals(n);
     }
 
     private ToolCallEvent toolUse(String id, String name, String args, String parentToolUseId) {

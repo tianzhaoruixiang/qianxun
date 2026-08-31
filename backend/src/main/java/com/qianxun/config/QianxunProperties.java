@@ -80,6 +80,15 @@ public class QianxunProperties {
         private String permissionMode = "bypassPermissions";
         /** 为 true 时在 api_server 工具集列表末尾追加 no_mcp 哨兵以禁用 MCP。 */
         private boolean appendNoMcp = false;
+        /**
+         * Claude Code 容器回调千寻编排接口的根地址（从 sidecar 看后端）。
+         * 例如 {@code http://qianxun-backend:8080}。空则不注入干警委派工具。
+         */
+        private String orchestrationBaseUrl = "";
+        /**
+         * 干警 {@code delegate_to_agent} 等待子任务结束的秒数。0 = 不限制（直到子轮结束或父轮取消）。
+         */
+        private int orchestrationWaitSeconds = 0;
         /** 兼容旧配置，网关侧不再读取。 */
         private String command = "claude";
         private String dataDir = "/opt/data";
@@ -102,6 +111,14 @@ public class QianxunProperties {
         public void setPermissionMode(String permissionMode) { this.permissionMode = permissionMode; }
         public boolean isAppendNoMcp() { return appendNoMcp; }
         public void setAppendNoMcp(boolean appendNoMcp) { this.appendNoMcp = appendNoMcp; }
+        public String getOrchestrationBaseUrl() { return orchestrationBaseUrl; }
+        public void setOrchestrationBaseUrl(String orchestrationBaseUrl) {
+            this.orchestrationBaseUrl = orchestrationBaseUrl == null ? "" : orchestrationBaseUrl;
+        }
+        public int getOrchestrationWaitSeconds() { return orchestrationWaitSeconds; }
+        public void setOrchestrationWaitSeconds(int orchestrationWaitSeconds) {
+            this.orchestrationWaitSeconds = Math.max(0, orchestrationWaitSeconds);
+        }
         public String getCommand() { return command; }
         public void setCommand(String command) { this.command = command; }
         public String getDataDir() { return dataDir; }
@@ -110,8 +127,8 @@ public class QianxunProperties {
 
     public static class Hermes {
         /**
-         * 启用后：智能体聊天走 Dashboard {@code /api/ws}（9119）；
-         * {@code base-url} 仅用于下一步建议等仍走 OpenAI 兼容网关的短请求。
+         * 启用后：智能体聊天走 Dashboard {@code /api/ws}（9119）。
+         * 下一步建议改走模型注册表 / 系统上游 OpenAI 兼容端点，不再使用本字段。
          */
         private boolean enabled = false;
         private String baseUrl = "";

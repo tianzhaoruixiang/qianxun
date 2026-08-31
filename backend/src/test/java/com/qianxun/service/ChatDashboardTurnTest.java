@@ -115,4 +115,17 @@ class ChatDashboardTurnTest {
         assertThat(plan.slashCommand()).contains("用户本轮附上了文档");
         assertThat(plan.slashCommand()).contains("总结附件");
     }
+
+    @Test
+    void plan_shouldPassThroughCompactSlash() {
+        List<Map<String, String>> stored = List.of(Map.of("role", "user", "content", "/compact"));
+        ChatDashboardTurn.Plan fromBody = ChatDashboardTurn.plan(
+                false, false, ChatGoalInvocation.fromRequest(null), stored, stored);
+        assertThat(fromBody.slashCommand()).isEqualTo("/compact");
+
+        ChatDashboardTurn.Plan explicit = ChatDashboardTurn.plan(
+                false, false, ChatGoalInvocation.fromRequest(null), null, false, "/compact",
+                stored, stored);
+        assertThat(explicit.slashCommand()).isEqualTo("/compact");
+    }
 }

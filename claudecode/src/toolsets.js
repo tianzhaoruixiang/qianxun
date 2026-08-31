@@ -92,6 +92,20 @@ export function lowerSet(names) {
   return out;
 }
 
+export function catalogClaudeTools() {
+  const all = [];
+  const seen = new Set();
+  for (const d of CATALOG) {
+    for (const t of d.claudeTools) {
+      if (!seen.has(t)) {
+        seen.add(t);
+        all.push(t);
+      }
+    }
+  }
+  return all;
+}
+
 export function allowedClaudeTools(enabledToolsets) {
   let on = lowerSet(enabledToolsets);
   if (on.size === 0) {
@@ -116,19 +130,19 @@ export function allowedClaudeTools(enabledToolsets) {
   return tools;
 }
 
+export function applyToolAllowlist(tools, allowlist) {
+  const allow = new Set(allowlist || []);
+  const next = (tools || []).filter((t) => allow.has(t));
+  return next.length ? next : ["Read"];
+}
+
+export function disallowedClaudeToolsFromAllowlist(allowed) {
+  const allow = new Set(allowed || []);
+  return catalogClaudeTools().filter((t) => !allow.has(t));
+}
+
 export function disallowedClaudeTools(enabledToolsets) {
-  const allowed = new Set(allowedClaudeTools(enabledToolsets));
-  const all = [];
-  const seen = new Set();
-  for (const d of CATALOG) {
-    for (const t of d.claudeTools) {
-      if (!seen.has(t)) {
-        seen.add(t);
-        all.push(t);
-      }
-    }
-  }
-  return all.filter((t) => !allowed.has(t));
+  return disallowedClaudeToolsFromAllowlist(allowedClaudeTools(enabledToolsets));
 }
 
 export function toInfos(enabled) {

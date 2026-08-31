@@ -171,7 +171,7 @@ public class ChatSessionRepository {
     public List<ChatSession> listByUserIdOrderByUpdatedDesc(String userId, int limit, int offset) {
         return jdbcTemplate.query(
                 "SELECT " + COLS + " FROM " + table
-                        + " WHERE `user_id` = ? ORDER BY `updated_at` DESC LIMIT ? OFFSET ?",
+                        + " WHERE `user_id` = ? AND `id` NOT LIKE 'task-%' ORDER BY `updated_at` DESC LIMIT ? OFFSET ?",
                 ROW_MAPPER, userId, limit, Math.max(0, offset)
         );
     }
@@ -201,7 +201,7 @@ public class ChatSessionRepository {
         inner.append("SELECT `id`,`user_id`,`title`,`created_at`,`updated_at`,")
                 .append("`agent_code`,`hermes_profile`,`agent_name`,`session_goal` FROM ")
                 .append(table)
-                .append(" WHERE `user_id` = ?");
+                .append(" WHERE `user_id` = ? AND `id` NOT LIKE 'task-%'");
         List<Object> args = new ArrayList<>();
         args.add(userId);
         appendListFilters(inner, args, f);
@@ -235,7 +235,7 @@ public class ChatSessionRepository {
     public List<AgentFacetRow> listAgentFacetsByUserId(String userId) {
         return jdbcTemplate.query(
                 "SELECT `agent_code`, `hermes_profile`, MAX(`agent_name`) AS `agent_name` FROM " + table
-                        + " WHERE `user_id` = ? GROUP BY `agent_code`, `hermes_profile`",
+                        + " WHERE `user_id` = ? AND `id` NOT LIKE 'task-%' GROUP BY `agent_code`, `hermes_profile`",
                 (rs, n) -> new AgentFacetRow(
                         emptyIfNull(rs.getString("agent_code")),
                         emptyIfNull(rs.getString("hermes_profile")),

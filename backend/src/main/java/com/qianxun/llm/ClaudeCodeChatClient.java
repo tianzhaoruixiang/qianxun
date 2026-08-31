@@ -22,6 +22,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
@@ -66,7 +67,8 @@ public class ClaudeCodeChatClient {
             BooleanSupplier cancelled,
             Consumer<Runnable> registerCancel,
             CompactListener compactListener,
-            int contextWindow
+            int contextWindow,
+            OfficerOrchestration orchestration
     ) throws Exception {
         if (!properties.getClaude().isEnabled()) {
             throw new IllegalStateException("未启用 Claude Code 运行器");
@@ -106,6 +108,17 @@ public class ClaudeCodeChatClient {
         }
         if (!hermes.isChatMcpAllowed(workspaceOwnerId, profile)) {
             body.put("mcpDisabled", true);
+        }
+        if (orchestration != null && orchestration.enabled()) {
+            LinkedHashMap<String, Object> orch = new LinkedHashMap<>();
+            orch.put("callbackBaseUrl", orchestration.callbackBaseUrl());
+            orch.put("bearerToken", orchestration.bearerToken());
+            orch.put("parentRunId", orchestration.parentRunId());
+            orch.put("parentSessionId", orchestration.parentSessionId());
+            if (orchestration.agents() != null && !orchestration.agents().isEmpty()) {
+                orch.put("agents", orchestration.agents());
+            }
+            body.put("orchestration", orch);
         }
 
         int timeoutSec = properties.getLlm().getStreamTimeoutSeconds();
@@ -258,6 +271,21 @@ public class ClaudeCodeChatClient {
             return "";
         }
         return s.length() <= max ? s : s.substring(0, max);
+    }
+
+    public record OfficerOrchestration(
+            String callbackBaseUrl,
+            String bearerToken,
+            String parentRunId,
+            String parentSessionId,
+            List<Map<String, String>> agents
+    ) {
+        public boolean enabled() {
+            return callbackBaseUrl != null && !callbackBaseUrl.isBlank()
+                    && bearerToken != null && !bearerToken.isBlank()
+                    && parentRunId != null && !parentRunId.isBlank()
+                    && parentSessionId != null && !parentSessionId.isBlank();
+        }
     }
 
     @FunctionalInterface

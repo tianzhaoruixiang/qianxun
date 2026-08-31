@@ -1,7 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 export const DATA_DIR = process.env.DATA_DIR || "/opt/data";
+
+const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+/** 镜像内置的 profile 模板（数智干警 default 等），发布到 DATA_DIR 前的源 */
+export const BUNDLED_PROFILES_ROOT = process.env.QIANXUN_BUNDLED_PROFILES
+  || `${APP_ROOT}/templates/profiles`;
 
 /** 平台级 profile 模板（管理员 upsert 写入，用户首次 ensure 时复制） */
 export const TEMPLATE_PROFILES_ROOT = `${DATA_DIR}/_templates/profiles`;
@@ -72,6 +79,11 @@ export function workspace(userId) {
 export function templateProfileHome(profile) {
   const name = normalizeProfileName(profile);
   return `${TEMPLATE_PROFILES_ROOT}/${name}`;
+}
+
+export function bundledProfileHome(profile) {
+  const name = normalizeProfileName(profile);
+  return `${BUNDLED_PROFILES_ROOT}/${name}`;
 }
 
 export function claudeMd(home) {

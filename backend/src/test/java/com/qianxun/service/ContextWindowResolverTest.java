@@ -117,6 +117,14 @@ class ContextWindowResolverTest {
         assertThat(resolver.resolveRuntimeModelWindow()).isEqualTo(131072);
     }
 
+    @Test
+    void resolveRuntimeModelWindow_usesKnownCatalogWhenUpstreamOmitsWindow() {
+        when(systemSettingsService.resolvedClaudeChatModel()).thenReturn("qwen3.6-plus");
+        lenient().when(modelRegistryRepository.findByCode("qwen3.6-plus")).thenReturn(Optional.empty());
+        lenient().when(modelRegistryRepository.findByNameIgnoreCase("qwen3.6-plus")).thenReturn(Optional.empty());
+        assertThat(resolver.resolveRuntimeModelWindow()).isEqualTo(1_000_000);
+    }
+
     private static ModelRegistryItem model(String code, String name, int window) {
         Instant now = Instant.now();
         return new ModelRegistryItem("id", code, name, "openai", "", window, 1024, true, now, now);

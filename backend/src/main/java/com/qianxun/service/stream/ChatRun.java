@@ -14,6 +14,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CancellationException;
+import java.util.function.BiConsumer;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -52,6 +53,8 @@ public final class ChatRun {
     private final AtomicLong seq = new AtomicLong(0);
     private final List<BufferedEvent> buffer = new ArrayList<>();
     private final CopyOnWriteArrayList<Subscriber> subscribers = new CopyOnWriteArrayList<>();
+    private final CopyOnWriteArrayList<BiConsumer<String, Map<String, Object>>> eventSinks =
+            new CopyOnWriteArrayList<>();
     private final AtomicBoolean cancelRequested = new AtomicBoolean(false);
     /** 停止时打断上游连接（关闭 HTTP body / abort WebSocket 等） */
     private final AtomicReference<Runnable> interruptHook = new AtomicReference<>();
@@ -218,6 +221,7 @@ public final class ChatRun {
         for (Subscriber sub : subscribers) {
             trySend(sub, name, payload);
         }
+        notifySinks(name, payload);
         return s;
     }
 
@@ -236,7 +240,24 @@ public final class ChatRun {
         for (Subscriber sub : subscribers) {
             trySend(sub, name, payload);
         }
+        notifySinks(name, payload);
         return s;
+    }
+
+    public void addEventSink(BiConsumer<String, Map<String, Object>> sink) {
+        if (sink != null) {
+            eventSinks.add(sink);
+        }
+    }
+
+    private void notifySinks(String name, Map<String, Object> payload) {
+        for (BiConsumer<String, Map<String, Object>> sink : eventSinks) {
+            try {
+                sink.accept(name, payload);
+            } catch (RuntimeException ex) {
+                log.debug("event sink failed session={} run={}: {}", sessionId, runId, ex.toString());
+            }
+        }
     }
 
     public void addSubscriber(SseEmitter emitter, long afterSeq) {

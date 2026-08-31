@@ -59,6 +59,10 @@ qianxun:
     permission-mode: ${QIANXUN_CLAUDE_PERMISSION_MODE:bypassPermissions}
     # false = 允许 MCP 工具（不再强制写入 no_mcp 哨兵）
     append-no-mcp: ${QIANXUN_CLAUDE_APPEND_NO_MCP:false}
+    # Claude Code 回调本服务（从 sidecar 访问后端）
+    orchestration-base-url: ${QIANXUN_ORCHESTRATION_BASE_URL:http://qianxun-backend:8080}
+    # 干警等待子智能体结束的秒数，0=不限制
+    orchestration-wait-seconds: ${QIANXUN_ORCHESTRATION_WAIT_SECONDS:0}
 
   # 旧 Hermes 运行器已停用，保留键以免残留环境变量报未知属性
   hermes:

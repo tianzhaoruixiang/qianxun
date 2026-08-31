@@ -1,6 +1,7 @@
 package com.qianxun.web;
 
 import com.qianxun.context.UserContext;
+import com.qianxun.security.BearerTokenHolder;
 import com.qianxun.service.QianXunServiceChatSession;
 import com.qianxun.service.QianXunServiceChatStream;
 import com.qianxun.service.stream.ActiveRunRegistry;
@@ -71,6 +72,7 @@ public class ChatStreamController {
                             "该会话正在输出中，请等待完成或先停止后再发送"));
         }
         ChatRun run = begun.get();
+        String bearer = BearerTokenHolder.get();
 
         SseEmitter emitter = new SseEmitter(0L);
         run.addSubscriber(emitter, 0);
@@ -82,9 +84,16 @@ public class ChatStreamController {
                 ? java.util.List.of()
                 : java.util.List.copyOf(request.fileIds());
         String skillName = request.skillName();
-        sseExecutor.execute(() -> chatStreamService.streamAnswer(
+        sseExecutor.execute(() -> {
+            BearerTokenHolder.set(bearer);
+            try {
+                chatStreamService.streamAnswer(
                 userId, sessionId, request.content(), modelCode, agentCode, hermesProfile, fileIds, skillName,
-                request.goal(), request.clearGoal(), request.agentsStatus(), request.slashCommand(), run));
+                request.goal(), request.clearGoal(), request.agentsStatus(), request.slashCommand(), run);
+            } finally {
+                BearerTokenHolder.clear();
+            }
+        });
         return emitter;
     }
 

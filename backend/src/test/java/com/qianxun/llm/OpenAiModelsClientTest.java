@@ -21,6 +21,10 @@ class OpenAiModelsClientTest {
                 .isEqualTo("https://dashscope.aliyuncs.com/compatible-mode/v1/models");
         assertThat(OpenAiModelsClient.modelsUrl("http://host.docker.internal:8000/v1/models"))
                 .isEqualTo("http://host.docker.internal:8000/v1/models");
+        assertThat(OpenAiModelsClient.modelInfoUrl("https://example.com/v1"))
+                .isEqualTo("https://example.com/v1/model/info");
+        assertThat(OpenAiModelsClient.modelInfoUrl("https://example.com/v1/models"))
+                .isEqualTo("https://example.com/v1/model/info");
     }
 
     @Test
@@ -69,6 +73,32 @@ class OpenAiModelsClientTest {
     }
 
     @Test
+    void findContextWindowInList_matchesLiteLlmModelInfo() throws Exception {
+        var root = mapper.readTree("""
+                {"data":[
+                  {
+                    "model_name":"openai-default",
+                    "litellm_params":{"model":"openai/qwen3.6-plus"},
+                    "model_info":{"max_input_tokens":"1000000"}
+                  }
+                ]}
+                """);
+        assertThat(OpenAiModelsClient.findContextWindowInList(root, "qwen3.6-plus")).isEqualTo(1_000_000);
+        assertThat(OpenAiModelsClient.parseModelInfos(root).get(0).id()).isEqualTo("openai-default");
+        assertThat(OpenAiModelsClient.parseModelInfos(root).get(0).contextWindow()).isEqualTo(1_000_000);
+    }
+
+    @Test
+    void parseModelInfos_enrichesKnownWindowWhenUpstreamOmitsIt() throws Exception {
+        var root = mapper.readTree("""
+                {"data":[{"id":"qwen3.6-plus"},{"id":"other"}]}
+                """);
+        var items = OpenAiModelsClient.parseModelInfos(root);
+        assertThat(items.get(0).contextWindow()).isEqualTo(1_000_000);
+        assertThat(items.get(1).contextWindow()).isZero();
+    }
+
+    @Test
     void listModelIds_readsOpenAiList() throws Exception {
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/v1/models", exchange -> {
@@ -106,5 +136,52 @@ class OpenAiModelsClientTest {
         } finally {
             server.stop(0);
         }
+    }
+
+    @Test
+    void findContextWindow_readsModelInfoThenKnownCatalog() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/models", exchange -> {
+            byte[] body = "{\"data\":[{\"id\":\"qwen3.6-plus\"}]}".getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.createContext("/v1/model/info", exchange -> {
+            byte[] body = "{\"data\":[{\"model_name\":\"openai-default\",\"litellm_params\":{\"model\":\"openai/qwen3.6-plus\"},\"model_info\":{\"max_input_tokens\":262144}}]}".getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+        try {
+            int port = server.getAddress().getPort();
+            OpenAiModelsClient client = new OpenAiModelsClient(mapper);
+            assertThat(client.findContextWindow("http://127.0.0.1:" + port + "/v1", "sk-test", "qwen3.6-plus"))
+                    .isEqualTo(262144);
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void findContextWindow_knownCatalogWhenNoBaseUrl() {
+        OpenAiModelsClient client = new OpenAiModelsClient(mapper);
+        assertThat(client.findContextWindow("", "", "qwen3.6-plus")).isEqualTo(1_000_000);
+        assertThat(client.findContextWindow(null, null, "missing")).isZero();
+    }
+
+    @Test
+    void mergeWindows_prefersPositiveExtra() {
+        var primary = java.util.List.of(
+                new OpenAiModelsClient.OpenAiModelInfo("a", 0),
+                new OpenAiModelsClient.OpenAiModelInfo("b", 8000)
+        );
+        var extra = java.util.List.of(new OpenAiModelsClient.OpenAiModelInfo("a", 32000));
+        var merged = OpenAiModelsClient.mergeWindows(primary, extra);
+        assertThat(merged.get(0).contextWindow()).isEqualTo(32000);
+        assertThat(merged.get(1).contextWindow()).isEqualTo(8000);
     }
 }

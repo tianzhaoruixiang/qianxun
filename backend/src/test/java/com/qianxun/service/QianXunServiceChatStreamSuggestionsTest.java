@@ -41,6 +41,15 @@ class QianXunServiceChatStreamSuggestionsTest {
         assertFalse(transcript.contains("hidden"));
     }
 
+    @Test
+    void httpBaseAcceptsOpenAiCompatibleUrls() {
+        assertTrue(QianXunServiceChatStream.isOpenAiCompatibleHttpBase("https://api.openai.com/v1"));
+        assertTrue(QianXunServiceChatStream.isOpenAiCompatibleHttpBase("http://litellm:4000/v1"));
+        assertFalse(QianXunServiceChatStream.isOpenAiCompatibleHttpBase("claude-code"));
+        assertFalse(QianXunServiceChatStream.isOpenAiCompatibleHttpBase(""));
+        assertFalse(QianXunServiceChatStream.isOpenAiCompatibleHttpBase(null));
+    }
+
     private static ChatMessage msg(String id, String role, String content, Instant at) {
         return new ChatMessage(
                 id, "sess", role, content,

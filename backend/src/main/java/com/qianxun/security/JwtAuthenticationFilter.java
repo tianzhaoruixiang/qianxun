@@ -69,6 +69,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         }
 
         UserContext.clear();
+        BearerTokenHolder.clear();
 
         String header = request.getHeader(HttpHeaders.AUTHORIZATION);
         if (header == null || !header.regionMatches(true, 0, "Bearer ", 0, 7)) {
@@ -94,12 +95,17 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             }
             UserContext.set(uid, username, dn != null && !dn.isBlank() ? dn : null, role);
             request.setAttribute(AuthRequestAttributes.FROM_JWT, Boolean.TRUE);
+            BearerTokenHolder.set(token);
         } catch (JwtException | IllegalArgumentException e) {
             writeUnauthorized(response, "令牌无效或已过期");
             return;
         }
 
-        filterChain.doFilter(request, response);
+        try {
+            filterChain.doFilter(request, response);
+        } finally {
+            BearerTokenHolder.clear();
+        }
     }
 
     private static String stripContextPath(HttpServletRequest request) {
