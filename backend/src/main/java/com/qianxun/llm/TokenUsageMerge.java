@@ -59,6 +59,7 @@ public final class TokenUsageMerge {
         data.put("contextUsed", contextUsed);
         data.put("contextPercent", percent);
         data.put("sessionSnapshot", true);
+        copyGenerationMs(previous, data);
         return data;
     }
 
@@ -126,7 +127,18 @@ public final class TokenUsageMerge {
         data.put("contextWindow", window);
         data.put("contextUsed", contextUsed);
         data.put("contextPercent", percent);
+        copyGenerationMs(previous, data);
         return data;
+    }
+
+    private static void copyGenerationMs(Map<String, Object> previous, Map<String, Object> data) {
+        if (previous == null || data.containsKey("generationMs")) {
+            return;
+        }
+        Object v = previous.get("generationMs");
+        if (v instanceof Number n && n.longValue() >= 0) {
+            data.put("generationMs", n.longValue());
+        }
     }
 
     private static int pickWindow(Integer fromUsage, Map<String, Object> previous, int fallback) {

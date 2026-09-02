@@ -119,7 +119,8 @@ public class AgentTaskService {
         String title = "子任务 · " + agent.name();
         sessionService.insertInternal(new ChatSession(
                 task.childSessionId(), userId, title, now, now,
-                agent.code(), trim(agent.hermesProfile()), agent.name(), ""
+                agent.code(), trim(agent.hermesProfile()), agent.name(), "",
+                sessionService.resolveWorkspaceSessionId(parentSessionId)
         ));
         ChatRun child = activeRunRegistry.tryBegin(task.childSessionId(), userId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "无法启动子智能体轮次"));
@@ -328,6 +329,7 @@ public class AgentTaskService {
             row.put("agentIcon", task.agentIcon());
         }
         row.put("a2aState", task.state().wire());
+        row.put("childSessionId", task.childSessionId());
         row.put("startedAt", task.createdAtMs());
         row.put("args", "{\"agentCode\":\"" + escape(task.agentCode())
                 + "\",\"message\":\"" + escape(clip(task.message(), 500)) + "\"}");

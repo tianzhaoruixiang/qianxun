@@ -25,10 +25,11 @@ public class ChatSessionRepository {
             emptyIfNull(rs.getString("agent_code")),
             emptyIfNull(rs.getString("hermes_profile")),
             emptyIfNull(rs.getString("agent_name")),
-            emptyIfNull(rs.getString("session_goal"))
+            emptyIfNull(rs.getString("session_goal")),
+            emptyIfNull(rs.getString("parent_session_id"))
     );
 
-    private static final String COLS = "`id`,`user_id`,`title`,`created_at`,`updated_at`,`agent_code`,`hermes_profile`,`agent_name`,`session_goal`";
+    private static final String COLS = "`id`,`user_id`,`title`,`created_at`,`updated_at`,`agent_code`,`hermes_profile`,`agent_name`,`session_goal`,`parent_session_id`";
 
     private final JdbcTemplate jdbcTemplate;
     private final String table;
@@ -40,14 +41,15 @@ public class ChatSessionRepository {
 
     public void insert(ChatSession session) {
         jdbcTemplate.update(
-                "INSERT INTO " + table + " (`id`,`user_id`,`title`,`created_at`,`updated_at`,`agent_code`,`hermes_profile`,`agent_name`,`session_goal`) "
-                        + "VALUES (?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO " + table + " (`id`,`user_id`,`title`,`created_at`,`updated_at`,`agent_code`,`hermes_profile`,`agent_name`,`session_goal`,`parent_session_id`) "
+                        + "VALUES (?,?,?,?,?,?,?,?,?,?)",
                 session.id(), session.userId(), session.title(),
                 Timestamp.from(session.createdAt()), Timestamp.from(session.updatedAt()),
                 emptyIfNull(session.agentCode()),
                 emptyIfNull(session.hermesProfile()),
                 emptyIfNull(session.agentName()),
-                emptyIfNull(session.sessionGoal())
+                emptyIfNull(session.sessionGoal()),
+                blankToNull(session.parentSessionId())
         );
     }
 
@@ -311,11 +313,41 @@ public class ChatSessionRepository {
             String sessionGoal
     ) {}
 
+    public List<String> listIdsByParentSessionId(String parentSessionId) {
+        if (parentSessionId == null || parentSessionId.isBlank()) {
+            return List.of();
+        }
+        return jdbcTemplate.query(
+                "SELECT `id` FROM " + table + " WHERE `parent_session_id` = ?",
+                (rs, n) -> rs.getString("id"),
+                parentSessionId
+        );
+    }
+
+    public int countByParentSessionId(String parentSessionId) {
+        if (parentSessionId == null || parentSessionId.isBlank()) {
+            return 0;
+        }
+        Integer n = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM " + table + " WHERE `parent_session_id` = ?",
+                Integer.class,
+                parentSessionId
+        );
+        return n == null ? 0 : n;
+    }
+
     private static Instant toInstant(Timestamp ts) {
         return ts == null ? Instant.EPOCH : ts.toInstant();
     }
 
     private static String emptyIfNull(String s) {
         return s == null ? "" : s;
+    }
+
+    private static String blankToNull(String s) {
+        if (s == null || s.isBlank()) {
+            return null;
+        }
+        return s.trim();
     }
 }

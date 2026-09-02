@@ -21,11 +21,11 @@ export function officerAllowedTools() {
 }
 
 /**
- * 干警本轮允许的 Claude 内置工具。去掉 Bash/LSP/Web/Todo 等大 schema；
- * 专业能力走 delegate_to_agent。
+ * 干警本轮允许的 Claude 内置工具。去掉 Bash/LSP/Web/Todo/AskUserQuestion 等大 schema；
+ * 无启用技能时不要带 Skill。专业能力走 delegate_to_agent。
  */
 export function officerLeanClaudeTools(skillsOn = true) {
-  const tools = ["Read", "Write", "Edit", "Glob", "Grep", "AskUserQuestion"];
+  const tools = ["Read", "Write", "Edit", "Glob", "Grep"];
   if (skillsOn) {
     tools.push("Skill");
   }

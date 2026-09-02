@@ -8,6 +8,7 @@ import {
   sessionFile,
   soulMd,
   workspace,
+  sessionCwd,
 } from "./paths.js";
 import { allowedClaudeTools, DEFAULT_ENABLED, disallowedClaudeTools, disallowedClaudeToolsFromAllowlist, expandEnabledToolsets, lowerSet } from "./toolsets.js";
 import { createProfile, ensureDiscoverableSkillsLayout, listSkills, migrateLegacyClaudeHome, readToolsets } from "./store.js";
@@ -27,6 +28,7 @@ import {
   officerHint,
 } from "./officerPolicy.js";
 import { buildSystemAppend, clipSoul } from "./systemAppend.js";
+import { SDK_SETTING_SOURCES, buildSystemPrompt, skillToolEnabled } from "./sdkOptions.js";
 
 async function readProfileSoul(home) {
   for (const file of [claudeMd(home), soulMd(home)]) {
@@ -334,7 +336,7 @@ async function rewriteClaudeSettingsFile(file) {
   return true;
 }
 
-async function ensureAnthropicBaseInSettings(home, userId) {
+async function ensureAnthropicBaseInSettings(home, userId, cwd) {
   const dir = claudeHome(home);
   await fs.mkdir(dir, { recursive: true });
   const files = [
@@ -343,6 +345,9 @@ async function ensureAnthropicBaseInSettings(home, userId) {
   ];
   if (userId) {
     files.push(path.join(workspace(userId), ".claude", "settings.json"));
+  }
+  if (cwd) {
+    files.push(path.join(cwd, ".claude", "settings.json"));
   }
   for (const file of files) {
     try {
@@ -450,13 +455,29 @@ function transcript(history) {
   return lines.join("\n");
 }
 
-async function readSessionId(cwd, cacheKey) {
+async function readSessionId(cwd, cacheKey, userId) {
   try {
     const id = (await fs.readFile(sessionFile(cwd, cacheKey), "utf8")).trim();
-    return id.length > 128 ? "" : id;
+    if (id && id.length <= 128) {
+      return id;
+    }
   } catch {
+    /* 新 cwd 尚无映射 */
+  }
+  if (!userId || !cacheKey) {
     return "";
   }
+  try {
+    const legacy = sessionFile(workspace(userId), cacheKey);
+    const id = (await fs.readFile(legacy, "utf8")).trim();
+    if (id && id.length <= 128) {
+      await writeSessionId(cwd, cacheKey, id);
+      return id;
+    }
+  } catch {
+    /* 无旧映射 */
+  }
+  return "";
 }
 
 async function writeSessionId(cwd, cacheKey, sessionId) {
@@ -476,14 +497,14 @@ export async function streamTurn(body, writeLine, signal) {
   }
   const sessionId = body.sessionId || "";
   await createProfile(userId, profile, "");
-  const cwd = workspace(userId);
+  const cwd = sessionCwd(userId, body.workspaceSessionId || sessionId);
   const home = profileHome(profile, userId);
   await fs.mkdir(cwd, { recursive: true });
   await fs.mkdir(claudeHome(home), { recursive: true });
   await migrateLegacyClaudeHome(home);
   await ensureDiscoverableSkillsLayout(home);
 
-  const resumeId = await readSessionId(cwd, sessionId);
+  const resumeId = await readSessionId(cwd, sessionId, userId);
   let prompt = body.prompt == null ? "" : String(body.prompt);
   if (!resumeId) {
     const hist = transcript(body.seedHistory);
@@ -503,6 +524,11 @@ export async function streamTurn(body, writeLine, signal) {
   const enabledSkillInfos = skills.filter((s) => s.enabled);
   const enabledSkills = enabledSkillInfos.map((s) => s.name);
   const skillsOn = enabled.some((n) => String(n).toLowerCase() === "skills");
+  const skillToolOn = skillToolEnabled(skillsOn, enabledSkills);
+  if (!skillToolOn) {
+    tools = tools.filter((t) => t !== "Skill");
+    disallowed = [...new Set([...disallowed, "Skill"])];
+  }
 
   const enabledSet = lowerSet(enabled);
   const disabledSet = lowerSet(gw.disabled || []);
@@ -535,7 +561,7 @@ export async function streamTurn(body, writeLine, signal) {
   let append = buildSystemAppend(cwd, soul, enabledSkillInfos);
   const officerMcp = buildOfficerMcp(body.orchestration);
   if (officerMcp) {
-    tools = applyOfficerLeanTools(tools, { skillsOn });
+    tools = applyOfficerLeanTools(tools, { skillsOn: skillToolOn });
     disallowed = [...new Set([
       ...disallowedClaudeToolsFromAllowlist(tools),
       ...officerBuiltinDelegationTools(),
@@ -558,7 +584,7 @@ export async function streamTurn(body, writeLine, signal) {
   const pluginHint = enabledPlugins.length
     ? `\n【已启用插件】${enabledPlugins.map((p) => p.name).join("、")}`
     : "";
-  await ensureAnthropicBaseInSettings(home, userId);
+  await ensureAnthropicBaseInSettings(home, userId, cwd);
   const compactWindow = resolveAutoCompactWindow(body?.contextWindow);
   const sdkEnv = sdkProcessEnv(home, model, {
     model: upstreamModel,
@@ -575,10 +601,14 @@ export async function streamTurn(body, writeLine, signal) {
     allowDangerouslySkipPermissions: permissionMode === "bypassPermissions",
     includePartialMessages: true,
     persistSession: true,
-    settingSources: ["user", "project"],
+    settingSources: SDK_SETTING_SOURCES,
     // 子任务正文/工具带 parent_tool_use_id，供前端挂到 Agent 卡片下
     forwardSubagentText: true,
-    systemPrompt: { type: "preset", preset: "claude_code", append: append + pluginHint },
+    systemPrompt: buildSystemPrompt({
+      officer: Boolean(officerMcp),
+      append,
+      pluginHint,
+    }),
     tools,
     allowedTools,
     disallowedTools: disallowed,
@@ -593,12 +623,10 @@ export async function streamTurn(body, writeLine, signal) {
   if (resumeId) {
     options.resume = resumeId;
   }
-  if (skillsOn && enabledSkills.length) {
+  if (skillToolOn) {
     options.skills = enabledSkills;
-  } else if (skillsOn) {
-    options.skills = [];
   }
-  console.log(`[claude-code] skills on=${skillsOn} names=${enabledSkills.join(",") || "-"} home=${home}`);
+  console.log(`[claude-code] skills on=${skillToolOn} names=${enabledSkills.join(",") || "-"} home=${home}`);
   if (Object.keys(mcpServers).length) {
     options.mcpServers = mcpServers;
     options.strictMcpConfig = true;

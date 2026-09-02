@@ -11,9 +11,9 @@ class ClaudeCodeToolsetsTest {
         assertThat(ClaudeCodeToolsets.CATALOG.stream().map(ClaudeCodeToolsets.Def::name))
                 .containsExactly("web", "file", "terminal", "code_execution", "delegation", "skills", "todo", "kanban", "plan")
                 .doesNotContain("memory", "session_search", "browser", "discord");
-        assertThat(ClaudeCodeToolsets.DEFAULT_ENABLED)
-                .containsExactlyElementsOf(
-                        ClaudeCodeToolsets.CATALOG.stream().map(ClaudeCodeToolsets.Def::name).toList());
+        assertThat(ClaudeCodeToolsets.DEFAULT_ENABLED).containsExactly("file", "skills");
+        assertThat(ClaudeCodeToolsets.isDefaultEnabled("FILE")).isTrue();
+        assertThat(ClaudeCodeToolsets.isDefaultEnabled("terminal")).isFalse();
         assertThat(ClaudeCodeToolsets.isKnown("skills")).isTrue();
         assertThat(ClaudeCodeToolsets.isKnown("plan")).isTrue();
         assertThat(ClaudeCodeToolsets.isKnown("browser")).isFalse();

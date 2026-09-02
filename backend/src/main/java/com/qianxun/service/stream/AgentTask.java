@@ -126,4 +126,11 @@ public final class AgentTask {
     public static boolean isTaskSession(String sessionId) {
         return sessionId != null && sessionId.startsWith(SESSION_PREFIX);
     }
+
+    public static String taskIdFromSession(String sessionId) {
+        if (!isTaskSession(sessionId)) {
+            return "";
+        }
+        return sessionId.substring(SESSION_PREFIX.length());
+    }
 }

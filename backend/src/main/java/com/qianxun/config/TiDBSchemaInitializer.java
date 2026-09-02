@@ -131,10 +131,12 @@ public class TiDBSchemaInitializer implements ApplicationRunner {
                     `hermes_profile`  VARCHAR(128)  NOT NULL DEFAULT "",
                     `agent_name`      VARCHAR(256)  NOT NULL DEFAULT "",
                     `session_goal`    TEXT,
+                    `parent_session_id` VARCHAR(64) NULL,
                     `created_at`      DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     `updated_at`      DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                     UNIQUE KEY `uk_id` (`id`),
-                    KEY `idx_user_updated` (`user_id`, `updated_at`, `id`)
+                    KEY `idx_user_updated` (`user_id`, `updated_at`, `id`),
+                    KEY `idx_parent_session` (`parent_session_id`)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
                 """.formatted(db));
 
@@ -354,6 +356,7 @@ public class TiDBSchemaInitializer implements ApplicationRunner {
         tryAlterAddColumn(db, "chat_session",      "hermes_profile","VARCHAR(128) NOT NULL DEFAULT \"\"");
         tryAlterAddColumn(db, "chat_session",      "agent_name",    "VARCHAR(256) NOT NULL DEFAULT \"\"");
         tryAlterAddColumn(db, "chat_session",      "session_goal",  "TEXT");
+        tryAlterAddColumn(db, "chat_session",      "parent_session_id", "VARCHAR(64) NULL");
         tryAlterAddColumn(db, "chat_activity_log", "user_id",       "VARCHAR(64) NOT NULL DEFAULT \"1\"");
         tryAlterAddColumn(db, "message_feedback",  "user_id",       "VARCHAR(64) NOT NULL DEFAULT \"1\"");
         tryAlterAddColumn(db, "chat_message",      "thinking_mode", "VARCHAR(16)");
@@ -402,6 +405,7 @@ public class TiDBSchemaInitializer implements ApplicationRunner {
         tryAlterAddIndex(db, "data_file", "uk_public_token", "UNIQUE KEY `uk_public_token` (`public_token`)");
         tryAlterAddIndex(db, "data_file", "idx_user_folder", "KEY `idx_user_folder` (`user_id`, `folder_path`(191))");
         tryAlterAddIndex(db, "chat_session", "idx_user_updated", "KEY `idx_user_updated` (`user_id`, `updated_at`, `id`)");
+        tryAlterAddIndex(db, "chat_session", "idx_parent_session", "KEY `idx_parent_session` (`parent_session_id`)");
         tryAlterAddIndex(db, "chat_message", "idx_session_created", "KEY `idx_session_created` (`session_id`, `created_at`, `id`)");
 
         seedUiWelcomeAndToolsIfEmpty();

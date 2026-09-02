@@ -84,6 +84,10 @@ class HermesToolsetServiceTest {
                 .first().extracting(HermesToolsetService.ToolsetView::enabled).isEqualTo(true);
         assertThat(views).filteredOn(v -> "file".equals(v.name()))
                 .first().extracting(HermesToolsetService.ToolsetView::enabled).isEqualTo(true);
+        assertThat(views).filteredOn(v -> "skills".equals(v.name()))
+                .first().extracting(HermesToolsetService.ToolsetView::enabled).isEqualTo(true);
+        assertThat(views).filteredOn(v -> "terminal".equals(v.name()))
+                .first().extracting(HermesToolsetService.ToolsetView::enabled).isEqualTo(false);
     }
 
     @Test
@@ -97,17 +101,17 @@ class HermesToolsetServiceTest {
                 info("stt", "cli", true)
         );
         HermesToolsetService.ChatToolsetPlan plan = HermesToolsetService.planChatGateway(listed);
-        assertThat(plan.enabled()).containsExactlyElementsOf(ClaudeCodeToolsets.DEFAULT_ENABLED);
-        assertThat(plan.disabled()).doesNotContainAnyElementsOf(ClaudeCodeToolsets.DEFAULT_ENABLED);
+        assertThat(plan.enabled()).containsExactly("web", "file", "skills");
+        assertThat(plan.disabled()).doesNotContain("web", "file", "skills");
         assertThat(plan.known()).contains("web", "file");
         assertThat(plan.known()).doesNotContain("browser", "discord", "hermes-cli", "stt");
         assertThat(plan.disabled()).doesNotContain("discord", "browser");
         assertThat(HermesToolsetService.apiServerConfigList(plan.enabled(), true))
-                .containsExactlyElementsOf(defaultPlusNoMcp());
+                .containsExactly("web", "file", "skills", "no_mcp");
     }
 
     @Test
-    void planChatGateway_shouldEnableAllClaudeCodeToolsets() {
+    void planChatGateway_shouldKeepListedEnabledPlusSafeBaseline() {
         HermesToolsetService.ChatToolsetPlan plan = HermesToolsetService.planChatGateway(List.of(
                 info("web", "cli", true),
                 info("file", "cli", true),
@@ -119,14 +123,16 @@ class HermesToolsetServiceTest {
                 info("kanban", "cli", true),
                 info("plan", "cli", true)
         ));
-        assertThat(plan.enabled()).containsExactlyElementsOf(ClaudeCodeToolsets.DEFAULT_ENABLED);
-        assertThat(plan.enabled()).contains("skills", "plan", "kanban", "todo");
+        assertThat(plan.enabled()).containsExactly(
+                "web", "file", "terminal", "code_execution", "delegation", "skills", "todo", "kanban", "plan");
         assertThat(plan.enabled()).doesNotContain("memory", "session_search", "browser");
         assertThat(plan.disabled()).doesNotContain(
                 "skills", "plan", "kanban",
                 "web", "file", "terminal", "code_execution", "delegation");
         assertThat(HermesToolsetService.apiServerConfigList(plan.enabled(), true))
-                .containsExactlyElementsOf(defaultPlusNoMcp());
+                .containsExactly(
+                        "web", "file", "terminal", "code_execution", "delegation",
+                        "skills", "todo", "kanban", "plan", "no_mcp");
     }
 
     @Test
@@ -134,8 +140,8 @@ class HermesToolsetServiceTest {
         HermesToolsetService.ChatToolsetPlan missing = HermesToolsetService.planChatGateway(List.of(
                 info("web", "cli", true)
         ));
-        assertThat(missing.enabled()).containsExactlyElementsOf(ClaudeCodeToolsets.DEFAULT_ENABLED);
-        assertThat(missing.disabled()).doesNotContain("file", "web");
+        assertThat(missing.enabled()).containsExactly("web", "file", "skills");
+        assertThat(missing.disabled()).doesNotContain("file", "web", "skills");
 
         HermesToolsetService.ChatToolsetPlan off = HermesToolsetService.planChatGateway(List.of(
                 info("file", "cli", false),
@@ -153,8 +159,8 @@ class HermesToolsetServiceTest {
                 info("todo", "cli", false),
                 info("kanban", "cli", true)
         ), true);
-        assertThat(plan.enabled()).contains(
-                "web", "file", "terminal", "code_execution", "delegation", "todo", "kanban", "skills");
+        assertThat(plan.enabled()).contains("web", "file", "todo", "kanban", "skills");
+        assertThat(plan.enabled()).doesNotContain("terminal", "code_execution", "delegation", "plan");
         assertThat(plan.disabled()).doesNotContain("file", "todo", "kanban", "skills");
     }
 
@@ -243,12 +249,6 @@ class HermesToolsetServiceTest {
                 org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any());
-    }
-
-    private static List<String> defaultPlusNoMcp() {
-        java.util.ArrayList<String> out = new java.util.ArrayList<>(ClaudeCodeToolsets.DEFAULT_ENABLED);
-        out.add("no_mcp");
-        return out;
     }
 
     private static HermesAgentClient.ToolsetInfo info(String name, String platform, boolean enabled) {

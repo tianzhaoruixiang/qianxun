@@ -5,18 +5,19 @@ import {
   officerHint,
   officerLeanClaudeTools,
 } from "./officerPolicy.js";
-import { allowedClaudeTools, DEFAULT_ENABLED } from "./toolsets.js";
+import { CATALOG, allowedClaudeTools } from "./toolsets.js";
 import { buildSystemAppend } from "./systemAppend.js";
 import { isReplaceableOfficerSoul, isStockOfficerSoulV1, isStubSoul } from "./store.js";
 
-test("officer lean tools drop bash and web", () => {
-  const full = allowedClaudeTools(DEFAULT_ENABLED);
+test("officer lean tools drop bash web and ask-user", () => {
+  const full = allowedClaudeTools(CATALOG.map((d) => d.name));
   const lean = applyOfficerLeanTools(full, { skillsOn: true });
   assert.ok(lean.includes("Read"));
   assert.ok(lean.includes("Skill"));
   assert.ok(!lean.includes("Bash"));
   assert.ok(!lean.includes("WebSearch"));
   assert.ok(!lean.includes("Agent"));
+  assert.ok(!lean.includes("AskUserQuestion"));
   assert.deepEqual(applyOfficerLeanTools(full, { skillsOn: false }), officerLeanClaudeTools(false));
 });
 

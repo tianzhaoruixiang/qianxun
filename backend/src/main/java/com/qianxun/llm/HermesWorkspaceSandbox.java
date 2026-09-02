@@ -5,13 +5,15 @@ package com.qianxun.llm;
  * <p>
  * 每个用户独占 {@code /opt/data/{userId}/}：
  * <ul>
- *   <li>{@code profiles/{profileName}/} — CLAUDE.md、技能、子智能体 profile</li>
- *   <li>{@code workspace/} — 统一 cwd（同一用户多会话共享）</li>
+ *   <li>{@code profiles/{profileName}/} — CLAUDE.md、技能、子智能体 profile（会话间共享）</li>
+ *   <li>{@code workspace/} — 用户工作区根，不再作为 cwd</li>
+ *   <li>{@code workspace/qx/{sessionId}/} — 每个用户可见多轮会话的独立 cwd</li>
  * </ul>
  */
 public final class HermesWorkspaceSandbox {
 
     public static final String DEFAULT_HOME = "/opt/data";
+    public static final String SESSION_DIR = "qx";
 
     private HermesWorkspaceSandbox() {}
 
@@ -48,6 +50,34 @@ public final class HermesWorkspaceSandbox {
 
     private static String workspacePath(String dataDir, String qianxunUserId) {
         return userRoot(dataDir, qianxunUserId) + "/workspace";
+    }
+
+    /**
+     * 会话 cwd：{@code /opt/data/{userId}/workspace/qx/{workspaceSessionId}}。
+     * {@code workspaceSessionId} 应是用户可见会话 id（task-* 须先解析到父会话）。
+     */
+    public static String sessionCwd(String qianxunUserId, String workspaceSessionId) {
+        return sessionCwd(DEFAULT_HOME, qianxunUserId, workspaceSessionId);
+    }
+
+    public static String sessionCwd(String dataDir, String qianxunUserId, String workspaceSessionId) {
+        String sid = sanitizeSessionId(workspaceSessionId);
+        if (sid.isBlank()) {
+            sid = "default";
+        }
+        return workspacePath(dataDir, qianxunUserId) + "/" + SESSION_DIR + "/" + sid;
+    }
+
+    /**
+     * 决定文件沙箱归属：普通会话用自身 id；{@code task-*} 用已解析的父会话 id。
+     */
+    public static String workspaceSessionId(String sessionId, String parentSessionId) {
+        String sid = sessionId == null ? "" : sessionId.trim();
+        String parent = parentSessionId == null ? "" : parentSessionId.trim();
+        if (sid.startsWith("task-") && !parent.isEmpty()) {
+            return parent;
+        }
+        return sid;
     }
 
     public static String profileHome(String qianxunUserId, String hermesProfile) {
@@ -94,5 +124,10 @@ public final class HermesWorkspaceSandbox {
             }
         }
         return s;
+    }
+
+    /** 会话目录名：与用户 id 相同的安全字符集。 */
+    public static String sanitizeSessionId(String raw) {
+        return sanitizeOwnerId(raw);
     }
 }

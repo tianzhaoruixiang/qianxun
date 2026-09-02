@@ -1,13 +1,18 @@
 package com.qianxun.service;
 
+import com.qianxun.config.QianxunProperties;
 import com.qianxun.context.UserContext;
 import com.qianxun.domain.AgentRegistryItem;
 import com.qianxun.domain.ChatMessage;
 import com.qianxun.domain.ChatSession;
+import com.qianxun.llm.ClaudeCodePaths;
+import com.qianxun.llm.HermesAgentClient;
+import com.qianxun.llm.HermesWorkspaceSandbox;
 import com.qianxun.repo.AgentRegistryRepository;
 import com.qianxun.repo.ChatMessageRepository;
 import com.qianxun.repo.ChatSessionRepository;
 import com.qianxun.service.stream.ActiveRunRegistry;
+import com.qianxun.service.stream.AgentTask;
 import com.qianxun.service.stream.ChatRun;
 import com.qianxun.web.dto.ChatMessageResponse;
 import com.qianxun.web.dto.ChatSessionListResponse;
@@ -17,6 +22,8 @@ import com.qianxun.web.dto.ListSessionsRequest;
 import com.qianxun.web.dto.SessionAgentFacet;
 import com.qianxun.web.dto.SessionGoalResponse;
 import com.qianxun.web.dto.UpdateSessionRequest;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -33,6 +40,7 @@ import java.util.UUID;
 @Service
 public class QianXunServiceChatSession {
 
+    private static final Logger log = LoggerFactory.getLogger(QianXunServiceChatSession.class);
     private static final int DEFAULT_PAGE_SIZE = 20;
     private static final int MAX_LIST          = 500;
     /** 单会话加载上限：最近 N 条（见 {@link ChatMessageRepository#listBySessionOrderByCreatedAsc}） */
@@ -43,19 +51,25 @@ public class QianXunServiceChatSession {
     private final QianXunServiceActivityLog activityLogService;
     private final AgentRegistryRepository agentRegistryRepository;
     private final ActiveRunRegistry activeRunRegistry;
+    private final HermesAgentClient hermesAgentClient;
+    private final QianxunProperties properties;
 
     public QianXunServiceChatSession(
             ChatSessionRepository sessionRepository,
             ChatMessageRepository messageRepository,
             QianXunServiceActivityLog activityLogService,
             AgentRegistryRepository agentRegistryRepository,
-            ActiveRunRegistry activeRunRegistry
+            ActiveRunRegistry activeRunRegistry,
+            HermesAgentClient hermesAgentClient,
+            QianxunProperties properties
     ) {
         this.sessionRepository = sessionRepository;
         this.messageRepository = messageRepository;
         this.activityLogService = activityLogService;
         this.agentRegistryRepository = agentRegistryRepository;
         this.activeRunRegistry = activeRunRegistry;
+        this.hermesAgentClient = hermesAgentClient;
+        this.properties = properties;
     }
 
     @Transactional
@@ -218,12 +232,13 @@ public class QianXunServiceChatSession {
     @Transactional
     public void delete(String id) {
         String userId = UserContext.getCurrentUserId();
-        if (sessionRepository.findByIdAndUserId(id, userId).isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "会话不存在");
-        }
+        ChatSession session = sessionRepository.findByIdAndUserId(id, userId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "会话不存在"));
+        deleteChildTaskSessions(id);
         messageRepository.deleteBySessionId(id);
         sessionRepository.deleteById(id, userId);
         activityLogService.deleteBySession(id);
+        teardownSessionWorkspace(userId, session);
     }
 
     /**
@@ -237,17 +252,96 @@ public class QianXunServiceChatSession {
         }
         for (String id : ids) {
             activeRunRegistry.findRunning(id).ifPresent(ChatRun::requestCancel);
+            if (!AgentTask.isTaskSession(id)) {
+                deleteChildTaskSessions(id);
+                sessionRepository.findById(id).ifPresent(s -> teardownSessionWorkspace(s.userId(), s));
+            }
             messageRepository.deleteBySessionId(id);
             activityLogService.deleteBySession(id);
         }
         return sessionRepository.deleteByIds(ids);
     }
 
+    private void deleteChildTaskSessions(String parentId) {
+        List<String> children = sessionRepository.listIdsByParentSessionId(parentId);
+        for (String child : children) {
+            activeRunRegistry.findRunning(child).ifPresent(ChatRun::requestCancel);
+            messageRepository.deleteBySessionId(child);
+            activityLogService.deleteBySession(child);
+        }
+        if (!children.isEmpty()) {
+            sessionRepository.deleteByIds(children);
+        }
+    }
+
+    private void teardownSessionWorkspace(String userId, ChatSession session) {
+        if (session == null || AgentTask.isTaskSession(session.id())) {
+            return;
+        }
+        if (sessionRepository.countByParentSessionId(session.id()) > 0) {
+            return;
+        }
+        String cwd = ClaudeCodePaths.sessionCwd(properties, userId, session.id());
+        HermesAgentClient.ManagedDeleteResult r = hermesAgentClient.deleteManagedPath(userId, cwd);
+        if (!r.ok()) {
+            log.warn("拆除会话工作区失败 session={} path={} msg={}", session.id(), cwd, r.message());
+        }
+    }
+
     public List<ChatMessageResponse> listMessages(String sessionId) {
         // 验证会话归属
         get(sessionId);
-        return messageRepository.listBySessionOrderByCreatedAsc(sessionId, MAX_MESSAGES)
+        List<ChatMessageResponse> messages = messageRepository
+                .listBySessionOrderByCreatedAsc(sessionId, MAX_MESSAGES)
                 .stream().map(QianXunServiceChatSession::toMessageResponse).toList();
+        if (AgentTask.isTaskSession(sessionId)) {
+            return messages;
+        }
+        return hydrateCrewToolCalls(sessionId, messages);
+    }
+
+    private List<ChatMessageResponse> hydrateCrewToolCalls(
+            String sessionId,
+            List<ChatMessageResponse> messages
+    ) {
+        List<String> childIds;
+        try {
+            childIds = sessionRepository.listIdsByParentSessionId(sessionId);
+        } catch (Exception ex) {
+            log.debug("列出子会话失败 session={}: {}", sessionId, ex.toString());
+            return messages;
+        }
+        if (childIds == null || childIds.isEmpty()) {
+            return messages;
+        }
+        List<CrewToolCallHydrator.ChildCrew> children = new ArrayList<>();
+        for (String childId : childIds) {
+            if (childId == null || childId.isBlank() || !AgentTask.isTaskSession(childId)) {
+                continue;
+            }
+            ChatSession child = sessionRepository.findById(childId).orElse(null);
+            if (child == null) {
+                continue;
+            }
+            List<ChatMessage> childMsgs = messageRepository.listBySessionOrderByCreatedAsc(
+                    childId, MAX_MESSAGES);
+            children.add(new CrewToolCallHydrator.ChildCrew(
+                    child.id(),
+                    child.agentCode(),
+                    child.agentName(),
+                    child.createdAt(),
+                    childMsgs
+            ));
+        }
+        if (children.isEmpty()) {
+            return messages;
+        }
+        try {
+            return CrewToolCallHydrator.merge(messages, children);
+        } catch (Exception ex) {
+            log.warn("回填子智能体工具详情失败 session={}: {}", sessionId, ex.toString());
+            return messages;
+        }
     }
 
     // ── 内部接口（不经过 UserContext，供 QianXunServiceChatStream 等内部逻辑使用）────────
@@ -277,6 +371,34 @@ public class QianXunServiceChatSession {
             return;
         }
         sessionRepository.insert(session);
+    }
+
+    /**
+     * 文件沙箱归属的用户可见会话 id。{@code task-*} 沿 parent_session_id 走到根会话。
+     */
+    public String resolveWorkspaceSessionId(String sessionId) {
+        String current = sessionId == null ? "" : sessionId.trim();
+        if (current.isEmpty()) {
+            return "";
+        }
+        if (!AgentTask.isTaskSession(current)) {
+            return current;
+        }
+        for (int i = 0; i < 8; i++) {
+            ChatSession row = sessionRepository.findById(current).orElse(null);
+            if (row == null) {
+                return current;
+            }
+            String parent = row.parentSessionId() == null ? "" : row.parentSessionId().trim();
+            if (parent.isEmpty()) {
+                return HermesWorkspaceSandbox.workspaceSessionId(current, "");
+            }
+            if (!AgentTask.isTaskSession(parent)) {
+                return parent;
+            }
+            current = parent;
+        }
+        return current;
     }
 
     /**

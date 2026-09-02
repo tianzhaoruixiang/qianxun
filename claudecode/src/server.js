@@ -77,6 +77,10 @@ function qProfile(req) {
   return req.query.profile || req.body?.profile || "default";
 }
 
+function qSession(req) {
+  return String(req.query.sessionId || req.body?.sessionId || "").trim();
+}
+
 function qUserId(req) {
   return req.query.userId || req.body?.userId || "";
 }
@@ -251,7 +255,7 @@ app.get("/api/files", async (req, res) => {
     return;
   }
   const recursive = req.query.recursive === "1" || String(req.query.recursive || "").toLowerCase() === "true";
-  const r = await listDir(userId, req.query.path, recursive);
+  const r = await listDir(userId, req.query.path, recursive, qSession(req));
   res.status(r.ok ? 200 : 400).json(r);
 });
 
@@ -260,7 +264,7 @@ app.post("/api/files/mkdir", async (req, res) => {
   if (!userId) {
     return;
   }
-  const r = await ensureDir(userId, req.body?.path);
+  const r = await ensureDir(userId, req.body?.path, qSession(req));
   res.status(r.ok ? 200 : 400).json(r);
 });
 
@@ -271,7 +275,7 @@ app.post("/api/files/write", async (req, res) => {
   }
   const b64 = req.body?.contentBase64 || "";
   const bytes = b64 ? Buffer.from(b64, "base64") : Buffer.alloc(0);
-  const r = await writeFileBytes(userId, req.body?.path, bytes);
+  const r = await writeFileBytes(userId, req.body?.path, bytes, qSession(req));
   res.status(r.ok ? 200 : 400).json(r);
 });
 
@@ -280,7 +284,7 @@ app.get("/api/files/download", async (req, res) => {
   if (!userId) {
     return;
   }
-  const r = await readFileBytes(userId, req.query.path);
+  const r = await readFileBytes(userId, req.query.path, qSession(req));
   if (!r.ok) {
     res.status(404).json({ message: r.message });
     return;
@@ -374,7 +378,7 @@ app.post("/api/files/delete", async (req, res) => {
   if (!userId) {
     return;
   }
-  const r = await deleteManagedPath(userId, req.body?.path);
+  const r = await deleteManagedPath(userId, req.body?.path, qSession(req));
   res.status(r.ok ? 200 : 400).json(r);
 });
 

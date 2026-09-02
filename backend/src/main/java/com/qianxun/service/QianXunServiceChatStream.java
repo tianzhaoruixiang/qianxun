@@ -37,6 +37,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CancellationException;
 
@@ -44,6 +45,11 @@ import java.util.concurrent.CancellationException;
 public class QianXunServiceChatStream {
 
     private static final Logger log = LoggerFactory.getLogger(QianXunServiceChatStream.class);
+    private static final Set<String> TOOL_PAYLOAD_SKIP_KEYS = Set.of(
+            "seq", "runId", "traceId", "sessionId", "assistantMessageId");
+    private static final List<String> CREW_IDENTITY_KEYS = List.of(
+            "displayName", "iconKind", "agentCode", "agentIcon", "subagent",
+            "delegationId", "parentId", "childSessionId", "a2aState");
 
     private final QianXunServiceChatSession sessionService;
     private final OpenAiCompatibleStreamClient openAiClient;
@@ -131,6 +137,7 @@ public class QianXunServiceChatStream {
                 .createdAt(Instant.now());
 
         StreamContext ctx = new StreamContext(run, logBuilder, userId);
+        ctx.setWorkspaceSessionId(sessionService.resolveWorkspaceSessionId(sessionId));
         String effectiveAgentCode = agentCode;
         String effectiveHermesProfile = hermesProfile;
         ChatSession bound = sessionService.findOwnedOrNull(sessionId, userId);
@@ -218,6 +225,8 @@ public class QianXunServiceChatStream {
             );
             run.setAssistantMessageId(draft.id());
             ctx.assistantMessageId = draft.id();
+            // 干警委派投影只发到父 ChatRun SSE，原先不进 ctx.toolCalls；这里吸入后才能随助手消息落库
+            run.addEventSink((name, payload) -> ingestPublishedToolCall(ctx, name, payload));
 
             // 草稿就绪后再发 started，便于订阅端拿到 assistantMessageId
             publish(ctx, "started", Map.of("sessionId", sessionId));
@@ -388,38 +397,114 @@ public class QianXunServiceChatStream {
         maybeFlushDraft(ctx);
     }
 
+    /**
+     * 父 ChatRun 上由 {@link AgentTaskService} 投影的 tool_call 不经过 SDK 监听器，
+     * 这里只 upsert 进 ctx.toolCalls，不再 publish，避免递归。
+     */
+    private void ingestPublishedToolCall(StreamContext ctx, String name, Map<String, Object> payload) {
+        if (!"tool_call".equals(name) || payload == null || payload.isEmpty() || ctx == null) {
+            return;
+        }
+        OpenAiCompatibleStreamClient.ToolCallEvent tc = toolCallEventFromPayload(payload);
+        if (tc == null) {
+            return;
+        }
+        upsertToolCall(ctx, tc, null);
+        maybeFlushDraft(ctx);
+    }
+
+    static OpenAiCompatibleStreamClient.ToolCallEvent toolCallEventFromPayload(Map<String, Object> payload) {
+        if (payload == null || payload.isEmpty()) {
+            return null;
+        }
+        String id = firstText(payload, "toolCallId", "id");
+        String name = firstText(payload, "toolName", "name");
+        if (id.isBlank() && name.isBlank()) {
+            return null;
+        }
+        String args = asJsonish(payload.get("args"));
+        String result = asJsonish(payload.get("result"));
+        String status = firstText(payload, "status");
+        Long started = asLong(payload.get("startedAt"));
+        Long ended = asLong(payload.get("endedAt"));
+        LinkedHashMap<String, Object> details = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> e : payload.entrySet()) {
+            String key = e.getKey();
+            if (key == null || key.isBlank() || e.getValue() == null) {
+                continue;
+            }
+            if (TOOL_PAYLOAD_SKIP_KEYS.contains(key)) {
+                continue;
+            }
+            details.put(key, e.getValue());
+        }
+        return new OpenAiCompatibleStreamClient.ToolCallEvent(
+                id.isBlank() ? null : id,
+                name.isBlank() ? null : name,
+                args,
+                result,
+                status.isBlank() ? null : status,
+                started,
+                ended,
+                details
+        );
+    }
+
+    private static String firstText(Map<String, Object> payload, String... keys) {
+        for (String key : keys) {
+            Object v = payload.get(key);
+            if (v != null && !String.valueOf(v).isBlank()) {
+                return String.valueOf(v).trim();
+            }
+        }
+        return "";
+    }
+
+    private static Long asLong(Object v) {
+        if (v instanceof Number n) {
+            return n.longValue();
+        }
+        if (v instanceof String s && !s.isBlank()) {
+            try {
+                return Long.parseLong(s.trim());
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private static String asJsonish(Object v) {
+        if (v == null) {
+            return null;
+        }
+        if (v instanceof String s) {
+            return s;
+        }
+        return String.valueOf(v);
+    }
+
     private void maybeFlushDraft(StreamContext ctx) {
         if (ctx.assistantMessageId == null || ctx.assistantMessageId.isBlank()) {
             return;
         }
-        long now = System.currentTimeMillis();
-        if (now - ctx.lastDraftFlushAt < 500) {
-            return;
+        synchronized (ctx.toolCallsLock) {
+            long now = System.currentTimeMillis();
+            if (now - ctx.lastDraftFlushAt < 500) {
+                return;
+            }
+            ctx.lastDraftFlushAt = now;
+            flushDraftLocked(ctx, ChatMessage.STATUS_STREAMING);
         }
-        ctx.lastDraftFlushAt = now;
-        flushDraft(ctx, ChatMessage.STATUS_STREAMING);
     }
 
-    private void flushDraft(StreamContext ctx, String status) {
+    private void flushDraftLocked(StreamContext ctx, String status) {
         if (ctx.assistantMessageId == null || ctx.assistantMessageId.isBlank()) {
             return;
         }
-        String toolCallsJson = null;
-        String usageJson = null;
-        String suggestionsJson = null;
-        try {
-            if (!ctx.toolCalls.isEmpty()) {
-                toolCallsJson = objectMapper.writeValueAsString(ctx.toolCalls);
-            }
-            if (ctx.usage != null && !ctx.usage.isEmpty()) {
-                usageJson = objectMapper.writeValueAsString(ctx.usage);
-            }
-            if (ctx.suggestions != null && !ctx.suggestions.isEmpty()) {
-                suggestionsJson = objectMapper.writeValueAsString(ctx.suggestions);
-            }
-        } catch (Exception ex) {
-            log.debug("draft JSON 序列化失败（忽略）: {}", ex.toString());
-        }
+        String toolCallsJson = snapshotToolCallsJsonLocked(ctx);
+        String usageJson = snapshotUsageJson(ctx);
+        String suggestionsJson = snapshotSuggestionsJson(ctx);
         try {
             sessionService.updateAssistantMessage(
                     ctx.assistantMessageId,
@@ -434,7 +519,55 @@ public class QianXunServiceChatStream {
         }
     }
 
+    private String snapshotToolCallsJson(StreamContext ctx) {
+        synchronized (ctx.toolCallsLock) {
+            return snapshotToolCallsJsonLocked(ctx);
+        }
+    }
+
+    private String snapshotToolCallsJsonLocked(StreamContext ctx) {
+        if (ctx.toolCalls.isEmpty()) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(ctx.toolCalls);
+        } catch (Exception ex) {
+            log.debug("tool_calls JSON 序列化失败（忽略）: {}", ex.toString());
+            return null;
+        }
+    }
+
+    private String snapshotUsageJson(StreamContext ctx) {
+        if (ctx.usage == null || ctx.usage.isEmpty()) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(ctx.usage);
+        } catch (Exception ex) {
+            log.debug("usage JSON 序列化失败（忽略）: {}", ex.toString());
+            return null;
+        }
+    }
+
+    private String snapshotSuggestionsJson(StreamContext ctx) {
+        if (ctx.suggestions == null || ctx.suggestions.isEmpty()) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(ctx.suggestions);
+        } catch (Exception ex) {
+            log.debug("suggestions JSON 序列化失败（忽略）: {}", ex.toString());
+            return null;
+        }
+    }
+
     private Map<String, Object> upsertToolCall(StreamContext ctx, OpenAiCompatibleStreamClient.ToolCallEvent tc, boolean[] createdOut) {
+        synchronized (ctx.toolCallsLock) {
+            return upsertToolCallLocked(ctx, tc, createdOut);
+        }
+    }
+
+    private Map<String, Object> upsertToolCallLocked(StreamContext ctx, OpenAiCompatibleStreamClient.ToolCallEvent tc, boolean[] createdOut) {
         boolean idFromUpstream = tc.toolCallId() != null && !tc.toolCallId().isBlank();
         String id = idFromUpstream
                 ? tc.toolCallId().trim()
@@ -514,6 +647,7 @@ public class QianXunServiceChatStream {
             row.put("endedAt", tc.endedAt());
         }
         mergeToolDetails(row, tc.details());
+        overlayCrewIdentity(row, tc.details());
         attachSubagentToOpenDelegation(ctx, row, incomingName);
         String stAfter = String.valueOf(row.getOrDefault("status", "")).toLowerCase();
         Object eventType = row.get("eventType");
@@ -661,6 +795,23 @@ public class QianXunServiceChatStream {
         }
     }
 
+    /** 委派卡片身份字段必须压过工具目录的 displayName/iconKind。 */
+    static void overlayCrewIdentity(Map<String, Object> row, Map<String, Object> details) {
+        if (row == null || details == null || details.isEmpty()) {
+            return;
+        }
+        for (String key : CREW_IDENTITY_KEYS) {
+            Object v = details.get(key);
+            if (v == null) {
+                continue;
+            }
+            if (v instanceof String s && s.isBlank()) {
+                continue;
+            }
+            row.put(key, v);
+        }
+    }
+
     private void ingestGeneratedDocuments(StreamContext ctx, Map<String, Object> row) {
         if (!properties.isAgentRunnerEnabled()) {
             return;
@@ -707,7 +858,7 @@ public class QianXunServiceChatStream {
         if (userId == null || userId.isBlank()) {
             return;
         }
-        String ws = ClaudeCodePaths.workspace(properties, userId);
+        String ws = ClaudeCodePaths.sessionCwd(properties, userId, ctx.workspaceSessionId());
         HermesAgentClient.ManagedDirList listed = hermesAgentClient.listManagedDirectory(
                 userId, ctx.hermesProfile(), ws, true);
         if (!listed.ok() || listed.entries() == null) {
@@ -751,7 +902,7 @@ public class QianXunServiceChatStream {
         ctx.ingestedPaths.add(key);
         try {
             HermesAgentClient.DownloadedFile file = hermesAgentClient.downloadGeneratedDocument(
-                    ctx.userId(), ctx.hermesProfile(), path);
+                    ctx.userId(), ctx.hermesProfile(), path, ctx.workspaceSessionId());
             if (!file.ok() || file.bytes() == null || file.bytes().length == 0) {
                 log.warn("跳过入库 Hermes 文件 {}：{}", path, file.message());
                 ctx.ingestedPaths.remove(path);
@@ -1101,6 +1252,7 @@ public class QianXunServiceChatStream {
         private Optional<AgentRegistryItem> activeAgent = Optional.empty();
         private String hermesProfile = "";
         private final List<Map<String, Object>> toolCalls = new ArrayList<>();
+        private final Object toolCallsLock = new Object();
         private Map<String, Object> usage;
         private List<String> suggestions;
         /** Dashboard：会话仍有活跃长程目标时，message.complete 后需等 goal 续轮 */
@@ -1109,6 +1261,7 @@ public class QianXunServiceChatStream {
         private long lastDraftFlushAt;
 
         private final String userId;
+        private String workspaceSessionId = "";
         private final long startedAt = System.currentTimeMillis();
         private final java.util.LinkedHashSet<String> ingestedPaths = new java.util.LinkedHashSet<>();
 
@@ -1121,6 +1274,10 @@ public class QianXunServiceChatStream {
         ChatActivityLog.Builder logBuilder() { return logBuilder; }
         String userId() { return userId; }
         long startedAt() { return startedAt; }
+        String workspaceSessionId() { return workspaceSessionId; }
+        void setWorkspaceSessionId(String id) {
+            this.workspaceSessionId = id == null ? "" : id.trim();
+        }
         Optional<AgentRegistryItem> activeAgent() { return activeAgent; }
         void setActiveAgent(Optional<AgentRegistryItem> agent) {
             this.activeAgent = agent != null ? agent : Optional.empty();
@@ -1212,6 +1369,7 @@ public class QianXunServiceChatStream {
             OpenAiCompatibleStreamClient.StreamCompletionMeta streamMeta = claudeCodeChatClient.streamTurn(
                     sessionId,
                     ctx.userId(),
+                    ctx.workspaceSessionId(),
                     hermesProfile,
                     dashboardPlan,
                     ctx.awaitGoalContinuations,
@@ -1530,7 +1688,7 @@ public class QianXunServiceChatStream {
         return n.equals("subagent") || n.equals("agent") || n.equals("task") || n.contains("delegate");
     }
 
-    private static void applyIncomingStatus(Map<String, Object> row, String incomingRaw) {
+    static void applyIncomingStatus(Map<String, Object> row, String incomingRaw) {
         String incoming = incomingRaw.trim().toLowerCase();
         String current = String.valueOf(row.getOrDefault("status", "")).trim().toLowerCase();
         boolean currentTerminal = "completed".equals(current) || "error".equals(current);
@@ -1544,6 +1702,11 @@ public class QianXunServiceChatStream {
             return;
         }
         if (("awaiting".equals(current) || "background".equals(current)) && incomingProgress) {
+            if (isSubagentRow(row)) {
+                row.put("status", incomingRaw);
+                row.remove("endedAt");
+                row.remove("durationMs");
+            }
             return;
         }
         row.put("status", incomingRaw);
@@ -1595,6 +1758,12 @@ public class QianXunServiceChatStream {
     }
 
     private static void closeDescendantToolCalls(StreamContext ctx, String parentId, String terminalStatus) {
+        synchronized (ctx.toolCallsLock) {
+            closeDescendantToolCallsLocked(ctx, parentId, terminalStatus);
+        }
+    }
+
+    private static void closeDescendantToolCallsLocked(StreamContext ctx, String parentId, String terminalStatus) {
         if (parentId == null || parentId.isBlank() || ctx.toolCalls.isEmpty()) {
             return;
         }
@@ -1616,6 +1785,12 @@ public class QianXunServiceChatStream {
     }
 
     private static void closeOpenToolCalls(StreamContext ctx, String terminalStatus) {
+        synchronized (ctx.toolCallsLock) {
+            closeOpenToolCallsLocked(ctx, terminalStatus);
+        }
+    }
+
+    private static void closeOpenToolCallsLocked(StreamContext ctx, String terminalStatus) {
         if (ctx.toolCalls.isEmpty()) {
             return;
         }
@@ -1644,25 +1819,12 @@ public class QianXunServiceChatStream {
         String sessionId = ctx.logBuilder().build().sessionId();
         String answer    = ctx.responseText.toString();
         ctx.logBuilder().llmResponseText(answer);
-        String toolCallsJson = null;
-        String usageJson = null;
-        String suggestionsJson = null;
-        try {
-            if (!ctx.toolCalls.isEmpty()) {
-                toolCallsJson = objectMapper.writeValueAsString(ctx.toolCalls);
-            }
-            if (ctx.usage != null && !ctx.usage.isEmpty()) {
-                usageJson = objectMapper.writeValueAsString(ctx.usage);
-            }
-            if (ctx.suggestions != null && !ctx.suggestions.isEmpty()) {
-                suggestionsJson = objectMapper.writeValueAsString(ctx.suggestions);
-            }
-        } catch (Exception ex) {
-            log.debug("tool/usage/suggestions JSON 序列化失败（忽略）: {}", ex.toString());
-        }
+        String toolCallsJson = snapshotToolCallsJson(ctx);
+        String usageJson = snapshotUsageJson(ctx);
+        String suggestionsJson = snapshotSuggestionsJson(ctx);
         String assistantId = persistFinalAssistant(ctx, answer, toolCallsJson, usageJson, suggestionsJson, ChatMessage.STATUS_COMPLETED);
         ctx.logBuilder().assistantMessageId(assistantId)
-                        .totalDurationMs(System.currentTimeMillis());
+                        .totalDurationMs(Math.max(0, System.currentTimeMillis() - ctx.startedAt()));
         activityLogService.saveLog(ctx.logBuilder().build());
         publishTerminal(ctx, "done", Map.of(
                 "assistantMessageId", assistantId,
@@ -1679,10 +1841,19 @@ public class QianXunServiceChatStream {
             String suggestionsJson,
             String status
     ) {
+        stampGenerationMs(ctx);
+        String stampedUsageJson = usageJson;
+        if (ctx.usage != null && !ctx.usage.isEmpty()) {
+            try {
+                stampedUsageJson = objectMapper.writeValueAsString(ctx.usage);
+            } catch (Exception ex) {
+                log.debug("usage JSON 序列化失败（忽略）: {}", ex.toString());
+            }
+        }
         if (ctx.assistantMessageId != null && !ctx.assistantMessageId.isBlank()) {
             try {
                 sessionService.updateAssistantMessage(
-                        ctx.assistantMessageId, answer, toolCallsJson, usageJson, suggestionsJson, status
+                        ctx.assistantMessageId, answer, toolCallsJson, stampedUsageJson, suggestionsJson, status
                 );
                 return ctx.assistantMessageId;
             } catch (org.springframework.dao.DataIntegrityViolationException ex) {
@@ -1690,21 +1861,28 @@ public class QianXunServiceChatStream {
                 String compacted = compactToolCallsJson(toolCallsJson);
                 try {
                     sessionService.updateAssistantMessage(
-                            ctx.assistantMessageId, answer, compacted, usageJson, suggestionsJson, status
+                            ctx.assistantMessageId, answer, compacted, stampedUsageJson, suggestionsJson, status
                     );
                     return ctx.assistantMessageId;
                 } catch (org.springframework.dao.DataIntegrityViolationException ex2) {
                     log.warn("压缩后仍过大，去掉 tool_calls 仅保存正文: {}", ex2.getMostSpecificCause().getMessage());
                     sessionService.updateAssistantMessage(
-                            ctx.assistantMessageId, answer, null, usageJson, suggestionsJson, status
+                            ctx.assistantMessageId, answer, null, stampedUsageJson, suggestionsJson, status
                     );
                     return ctx.assistantMessageId;
                 }
             }
         }
         return persistAssistantMessage(
-                ctx.logBuilder().build().sessionId(), answer, toolCallsJson, usageJson, suggestionsJson
+                ctx.logBuilder().build().sessionId(), answer, toolCallsJson, stampedUsageJson, suggestionsJson
         ).id();
+    }
+
+    private void stampGenerationMs(StreamContext ctx) {
+        long ms = Math.max(0, System.currentTimeMillis() - ctx.startedAt());
+        Map<String, Object> usage = ctx.usage == null ? new LinkedHashMap<>() : new LinkedHashMap<>(ctx.usage);
+        usage.put("generationMs", ms);
+        ctx.usage = usage;
     }
 
     /**
@@ -1772,7 +1950,13 @@ public class QianXunServiceChatStream {
         ctx.logBuilder().llmResponseText(answer);
         String assistantId = "";
         try {
-            assistantId = persistFinalAssistant(ctx, answer, null, null, null, ChatMessage.STATUS_CANCELLED);
+            closeOpenToolCalls(ctx, "error");
+            assistantId = persistFinalAssistant(
+                    ctx, answer,
+                    snapshotToolCallsJson(ctx),
+                    snapshotUsageJson(ctx),
+                    snapshotSuggestionsJson(ctx),
+                    ChatMessage.STATUS_CANCELLED);
             ctx.logBuilder().assistantMessageId(assistantId);
         } catch (Exception ex) {
             log.warn("取消时落库助手草稿失败: {}", ex.toString());
@@ -1801,7 +1985,13 @@ public class QianXunServiceChatStream {
         ctx.logBuilder().llmResponseText(answer);
         try {
             if (ctx.assistantMessageId != null && !ctx.assistantMessageId.isBlank()) {
-                persistFinalAssistant(ctx, answer, null, null, null, ChatMessage.STATUS_ERROR);
+                closeOpenToolCalls(ctx, "error");
+                persistFinalAssistant(
+                        ctx, answer,
+                        snapshotToolCallsJson(ctx),
+                        snapshotUsageJson(ctx),
+                        snapshotSuggestionsJson(ctx),
+                        ChatMessage.STATUS_ERROR);
             }
         } catch (Exception persistEx) {
             log.warn("错误路径落库助手草稿失败: {}", persistEx.toString());

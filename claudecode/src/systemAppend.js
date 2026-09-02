@@ -2,7 +2,8 @@ export const DOC_HINT = "【工作区】文件/终端只用当前 cwd 相对路�
   + "沙箱已预装 python3（pandas/numpy/openpyxl/python-docx/matplotlib），不要 pip install。"
   + "生成的 xlsx/md/docx 写入 cwd 普通文件名；不要编造公开下载链接或泄露内部主机名。平台会入库并给出链接。";
 
-const SOUL_APPEND_MAX = 80_000;
+/** 人设写入与注入上限（字）。过长会占满首轮上下文。 */
+export const SOUL_APPEND_MAX = 4_000;
 
 export function clipSoul(text) {
   const t = String(text || "").trim();

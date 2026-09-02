@@ -43,7 +43,7 @@ public class HermesDashboardChatClient {
 
     private static final Logger log = LoggerFactory.getLogger(HermesDashboardChatClient.class);
     private static final String DOC_HINT =
-            "【工作区规则】每个用户有独立 cwd，同一用户的多个会话共享该目录。"
+            "【工作区规则】每个用户可见的多轮会话有独立 cwd，子智能体与父会话共用该目录。"
                     + "文件/终端操作只能使用该 cwd 下的相对路径；"
                     + "不要使用绝对路径访问其它目录，不要 ls/读取父目录（..）或同级其它 qx 用户目录。"
                     + "只有当用户确实要求访问该目录之外的路径时，才简要说明无法访问并继续处理其余部分；"
@@ -123,7 +123,7 @@ public class HermesDashboardChatClient {
 
     /**
      * @param cacheKey         千寻会话 ID：决定复用哪个上游 Dashboard session
-     * @param workspaceOwnerId 千寻用户 ID：决定 cwd 沙箱，同一用户的多个会话共享工作区
+     * @param workspaceOwnerId 千寻用户 ID：决定用户数据根目录
      */
     public OpenAiCompatibleStreamClient.StreamCompletionMeta streamTurn(
             String cacheKey,
@@ -273,7 +273,7 @@ public class HermesDashboardChatClient {
     public static String cacheKey(String qianxunSessionId, String profile) {
         String sid = qianxunSessionId == null ? "" : qianxunSessionId.trim();
         String p = profile == null ? "" : profile.trim();
-        // v4：用户级 cwd 沙箱（同一用户多会话共享）+ 每轮工作区围栏
+        // v4：每会话独立 cwd（task 子会话复用父会话工作区）+ 每轮工作区围栏
         return "v4\0" + sid + "\0" + p;
     }
 

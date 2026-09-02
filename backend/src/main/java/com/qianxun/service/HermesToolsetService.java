@@ -30,8 +30,8 @@ public class HermesToolsetService {
     static final String NO_MCP = "no_mcp";
 
     /**
-     * 对话缺省白名单：默认打开 Claude Code 目录中的全部工具集。
-     * 用户在工具市场关闭的项写入 disabled，不会被这份缺省列表重新打开。
+     * 对话缺省白名单：默认只开 file / skills。
+     * 用户在工具市场打开的其它项写入 enabled；关闭的项写入 disabled。
      */
     static final List<String> DEFAULT_CHAT_ENABLED = ClaudeCodeToolsets.DEFAULT_ENABLED;
 
@@ -74,7 +74,7 @@ public class HermesToolsetService {
         List<ToolsetView> out = new ArrayList<>();
         for (ClaudeCodeToolsets.Def d : ClaudeCodeToolsets.CATALOG) {
             HermesAgentClient.ToolsetInfo t = by.get(d.name().toLowerCase(Locale.ROOT));
-            boolean on = t == null || t.enabled();
+            boolean on = t != null ? t.enabled() : ClaudeCodeToolsets.isDefaultEnabled(d.name());
             HermesAgentClient.ToolsetInfo src = new HermesAgentClient.ToolsetInfo(
                     d.name(),
                     d.label(),
@@ -205,10 +205,19 @@ public class HermesToolsetService {
                 String name = t.name().trim();
                 present.add(name);
                 known.add(name);
-                disabled.add(name);
+                if (t.enabled()) {
+                    enabled.add(name);
+                } else {
+                    disabled.add(name);
+                }
             }
         }
-        // 对话白名单只认 Claude Code 目录。市场开关通过网关 disabled 列表生效。
+        if (enabled.isEmpty()) {
+            for (String extra : DEFAULT_CHAT_ENABLED) {
+                enabled.add(canonicalPresent(present, extra));
+            }
+        }
+        // 对话白名单保留用户已打开的项，并保证缺省 file / skills 始终可用。
         for (String extra : DEFAULT_CHAT_ENABLED) {
             if (isAlwaysDisabled(extra)) {
                 continue;

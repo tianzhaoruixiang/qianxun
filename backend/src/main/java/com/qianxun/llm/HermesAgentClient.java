@@ -238,8 +238,8 @@ public class HermesAgentClient {
             return new SoulResult(false, "", false, "未启用或未配置智能体运行器");
         }
         String text = content == null ? "" : content;
-        if (text.length() > 80_000) {
-            return new SoulResult(false, "", false, "SOUL.md 过长（最多 80000 字）");
+        if (text.length() > 4_000) {
+            return new SoulResult(false, "", false, "SOUL.md 过长（最多 4000 字）");
         }
         try {
             LinkedHashMap<String, Object> body = new LinkedHashMap<>();
@@ -693,9 +693,13 @@ public class HermesAgentClient {
     }
 
     public DownloadedFile downloadGeneratedDocument(String userId, String profile, String path) {
+        return downloadGeneratedDocument(userId, profile, path, null);
+    }
+
+    public DownloadedFile downloadGeneratedDocument(String userId, String profile, String path, String workspaceSessionId) {
         DownloadedFile last = new DownloadedFile(false, new byte[0], filenameOf(path), "路径为空");
-        for (String candidate : HermesGeneratedDocuments.downloadCandidates(path, userId)) {
-            last = downloadManagedFile(userId, profile, candidate, false);
+        for (String candidate : HermesGeneratedDocuments.downloadCandidates(path, userId, workspaceSessionId)) {
+            last = downloadManagedFile(userId, profile, candidate, false, workspaceSessionId);
             if (last.ok()) {
                 return last;
             }
@@ -704,6 +708,12 @@ public class HermesAgentClient {
     }
 
     public DownloadedFile downloadManagedFile(String userId, String profile, String path, boolean fallbackToBasename) {
+        return downloadManagedFile(userId, profile, path, fallbackToBasename, null);
+    }
+
+    public DownloadedFile downloadManagedFile(
+            String userId, String profile, String path, boolean fallbackToBasename, String workspaceSessionId
+    ) {
         String raw = path == null ? "" : path.trim();
         if (raw.isBlank()) {
             return new DownloadedFile(false, new byte[0], "", "路径为空");
@@ -713,12 +723,16 @@ public class HermesAgentClient {
         }
         try {
             String url = withScope(origin() + "/api/files/download?path=" + encodeQueryPath(raw), userId, profile);
+            String sid = workspaceSessionId == null ? "" : workspaceSessionId.trim();
+            if (!sid.isBlank()) {
+                url = url + "&sessionId=" + encode(sid);
+            }
             HttpResponse<byte[]> res = sendBytes("GET", url);
             if (res.statusCode() >= 200 && res.statusCode() < 300 && res.body() != null && res.body().length > 0) {
                 return new DownloadedFile(true, res.body(), filenameOf(raw), "");
             }
             if (fallbackToBasename && res.statusCode() == 404 && raw.contains("/")) {
-                return downloadManagedFile(userId, profile, filenameOf(raw), false);
+                return downloadManagedFile(userId, profile, filenameOf(raw), false, workspaceSessionId);
             }
             String msg = res.body() == null ? "" : new String(res.body(), StandardCharsets.UTF_8);
             return new DownloadedFile(false, new byte[0], filenameOf(raw),

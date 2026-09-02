@@ -2,6 +2,7 @@ package com.qianxun.storage;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.qianxun.llm.HermesWorkspaceSandbox;
 
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -100,9 +101,13 @@ public final class HermesGeneratedDocuments {
     }
 
     /**
-     * @param userId 千寻用户 ID。Claude Code 的 cwd 是 {@code /opt/data/{userId}/workspace}。
+     * @param userId 千寻用户 ID。Claude Code 的 cwd 是 {@code /opt/data/{userId}/workspace/qx/{sessionId}}。
      */
     public static List<String> downloadCandidates(String path, String userId) {
+        return downloadCandidates(path, userId, null);
+    }
+
+    public static List<String> downloadCandidates(String path, String userId, String workspaceSessionId) {
         LinkedHashSet<String> out = new LinkedHashSet<>();
         if (path == null || path.isBlank()) {
             return List.of();
@@ -122,6 +127,11 @@ public final class HermesGeneratedDocuments {
             if (!uid.isBlank()) {
                 out.add("/opt/data/" + uid + "/workspace/" + base);
                 out.add("workspace/" + base);
+                String sid = HermesWorkspaceSandbox.sanitizeSessionId(workspaceSessionId);
+                if (!sid.isBlank()) {
+                    out.add("/opt/data/" + uid + "/workspace/qx/" + sid + "/" + base);
+                    out.add("workspace/qx/" + sid + "/" + base);
+                }
             }
             out.add("files/public/" + base);
             out.add("/opt/data/" + base);

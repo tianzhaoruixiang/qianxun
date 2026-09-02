@@ -30,9 +30,38 @@ class HermesWorkspaceSandboxTest {
     }
 
     @Test
-    void sameUserSharesWorkspaceAcrossSessions() {
+    void sameUserSharesUserWorkspaceRootAcrossProfiles() {
         assertThat(HermesWorkspaceSandbox.resolve("jicai-agent", "user-01"))
                 .isEqualTo(HermesWorkspaceSandbox.resolve("default", "user-01"));
+        assertThat(HermesWorkspaceSandbox.resolve("jicai-agent", "user-01"))
+                .isEqualTo("/opt/data/user-01/workspace");
+    }
+
+    @Test
+    void differentSessionsGetDifferentCwds() {
+        assertThat(HermesWorkspaceSandbox.sessionCwd("user-01", "sess-a"))
+                .isEqualTo("/opt/data/user-01/workspace/qx/sess-a");
+        assertThat(HermesWorkspaceSandbox.sessionCwd("user-01", "sess-b"))
+                .isEqualTo("/opt/data/user-01/workspace/qx/sess-b");
+        assertThat(HermesWorkspaceSandbox.sessionCwd("user-01", "sess-a"))
+                .isNotEqualTo(HermesWorkspaceSandbox.sessionCwd("user-01", "sess-b"));
+    }
+
+    @Test
+    void taskSessionUsesParentWorkspace() {
+        assertThat(HermesWorkspaceSandbox.workspaceSessionId("task-abc", "sess-root"))
+                .isEqualTo("sess-root");
+        assertThat(HermesWorkspaceSandbox.sessionCwd(
+                "user-01",
+                HermesWorkspaceSandbox.workspaceSessionId("task-abc", "sess-root")))
+                .isEqualTo("/opt/data/user-01/workspace/qx/sess-root");
+    }
+
+    @Test
+    void sessionCwdRejectsUnsafeSessionId() {
+        assertThat(HermesWorkspaceSandbox.sanitizeSessionId("../etc")).isEmpty();
+        assertThat(HermesWorkspaceSandbox.sessionCwd("user-01", "../x"))
+                .isEqualTo("/opt/data/user-01/workspace/qx/default");
     }
 
     @Test

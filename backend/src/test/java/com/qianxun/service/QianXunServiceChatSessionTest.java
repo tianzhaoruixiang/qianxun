@@ -2,6 +2,7 @@ package com.qianxun.service;
 
 import com.qianxun.context.UserContext;
 import com.qianxun.domain.AgentRegistryItem;
+import com.qianxun.domain.ChatMessage;
 import com.qianxun.domain.ChatSession;
 import com.qianxun.repo.AgentRegistryRepository;
 import com.qianxun.repo.ChatMessageRepository;
@@ -44,6 +45,10 @@ class QianXunServiceChatSessionTest {
     private AgentRegistryRepository agentRegistryRepository;
     @Mock
     private ActiveRunRegistry activeRunRegistry;
+    @Mock
+    private com.qianxun.llm.HermesAgentClient hermesAgentClient;
+    @Mock
+    private com.qianxun.config.QianxunProperties properties;
 
     @InjectMocks
     private QianXunServiceChatSession service;
@@ -207,6 +212,48 @@ class QianXunServiceChatSessionTest {
         assertThat(QianXunServiceChatSession.agentGroupKey("", "default", "")).isEqualTo("__digital_officer__");
         assertThat(QianXunServiceChatSession.agentGroupKey("", "worker", "未分类")).isEqualTo("uncat");
         assertThat(QianXunServiceChatSession.agentGroupKey("", "Worker", "自定义")).isEqualTo("profile:worker");
+    }
+
+    @Test
+    void listMessages_shouldHydrateChildCrewTools() {
+        Instant t0 = Instant.parse("2026-09-01T10:00:00Z");
+        ChatSession parent = new ChatSession("s1", "u1", "会话", t0, t0);
+        when(sessionRepository.findByIdAndUserId("s1", "u1")).thenReturn(Optional.of(parent));
+        when(messageRepository.listBySessionOrderByCreatedAsc("s1", 500)).thenReturn(List.of(
+                new ChatMessage("m1", "s1", "user", "请法务看", null, null, null, null,
+                        null, null, null, t0, "completed", null),
+                new ChatMessage("m2", "s1", "assistant", "好的", null, null, null, null,
+                        "[]", null, null, t0.plusMillis(1), "completed", "run1")
+        ));
+        String childId = "task-legal01";
+        when(sessionRepository.listIdsByParentSessionId("s1")).thenReturn(List.of(childId));
+        when(sessionRepository.findById(childId)).thenReturn(Optional.of(
+                new ChatSession(childId, "u1", "子任务 · 法务助手", t0.plusSeconds(1), t0.plusSeconds(8),
+                        "legal", "legal", "法务助手", "", "s1")
+        ));
+        when(messageRepository.listBySessionOrderByCreatedAsc(childId, 500)).thenReturn(List.of(
+                new ChatMessage("c2", childId, "assistant", "意见如下", null, null, null, null,
+                        "[{\"toolCallId\":\"read1\",\"toolName\":\"Read\",\"status\":\"completed\"}]",
+                        null, null, t0.plusSeconds(2), "completed", "childrun")
+        ));
+
+        var msgs = service.listMessages("s1");
+        assertThat(msgs).hasSize(2);
+        String json = msgs.get(1).toolCallsJson();
+        assertThat(json).contains("legal01");
+        assertThat(json).contains("法务助手");
+        assertThat(json).contains("read1");
+        assertThat(json).contains("\"parentId\":\"legal01\"");
+    }
+
+    @Test
+    void resolveWorkspaceSessionId_walksTaskParent() {
+        Instant now = Instant.now();
+        when(sessionRepository.findById("task-child")).thenReturn(Optional.of(
+                new ChatSession("task-child", "u1", "子任务", now, now, "law", "law", "法务", "", "root-sess")
+        ));
+        assertThat(service.resolveWorkspaceSessionId("root-sess")).isEqualTo("root-sess");
+        assertThat(service.resolveWorkspaceSessionId("task-child")).isEqualTo("root-sess");
     }
 
     @Test

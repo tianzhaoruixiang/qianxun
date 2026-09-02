@@ -71,9 +71,21 @@ export function profileHome(profile, userId) {
   return `${profilesRoot(userId)}/${name}`;
 }
 
-/** 用户统一工作区 cwd：/opt/data/{userId}/workspace */
+/** 用户工作区根（不再作为 cwd）：/opt/data/{userId}/workspace */
 export function workspace(userId) {
   return `${userRoot(userId)}/workspace`;
+}
+
+export const SESSION_DIR = "qx";
+
+export function sanitizeSessionId(sessionId) {
+  return sanitizeOwnerId(sessionId);
+}
+
+/** 会话独立 cwd：/opt/data/{userId}/workspace/qx/{workspaceSessionId} */
+export function sessionCwd(userId, workspaceSessionId) {
+  const sid = sanitizeSessionId(workspaceSessionId) || "default";
+  return `${workspace(userId)}/${SESSION_DIR}/${sid}`;
 }
 
 export function templateProfileHome(profile) {
@@ -152,7 +164,7 @@ export function filenameOf(p) {
   return slash >= 0 ? s.slice(slash + 1) : s;
 }
 
-export function resolveManaged(absPath, userId) {
+export function resolveManaged(absPath, userId, workspaceSessionId) {
   const raw = String(absPath ?? "").trim();
   if (!raw) {
     throw new Error("路径不能为空");
@@ -162,7 +174,8 @@ export function resolveManaged(absPath, userId) {
     throw new Error("用户标识无效");
   }
   const root = userRoot(uid);
-  const workspaceDir = workspace(uid);
+  const sid = sanitizeSessionId(workspaceSessionId);
+  const workspaceDir = sid ? sessionCwd(uid, sid) : workspace(uid);
   let resolved;
   if (path.isAbsolute(raw)) {
     resolved = path.resolve(raw);

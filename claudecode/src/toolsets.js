@@ -65,8 +65,8 @@ export const CATALOG = [
   },
 ];
 
-/** 默认打开目录中的全部 Claude Code 工具集；用户显式关闭的项仍以 disabled 为准。 */
-export const DEFAULT_ENABLED = CATALOG.map((d) => d.name);
+/** 缺省只开文件与技能；终端/网页/委派等需在工具市场显式打开。 */
+export const DEFAULT_ENABLED = ["file", "skills"];
 
 export function isCatalogName(name) {
   const key = String(name || "").trim().toLowerCase();
@@ -74,12 +74,26 @@ export function isCatalogName(name) {
 }
 
 /**
- * 只保留 Claude Code 目录。未出现在 disabled 中的工具集一律视为开启。
- * enabled 中的 Hermes / 未知名称会被丢弃，不会进入对话白名单。
+ * 只保留 Claude Code 目录中、出现在 enabled 且未 disabled 的项。
+ * enabled 为空时回落到 DEFAULT_ENABLED。Hermes / 未知名称丢弃。
  */
 export function expandEnabledToolsets(enabled, disabled) {
   const off = lowerSet(disabled);
-  return CATALOG.map((d) => d.name).filter((n) => !off.has(n));
+  const requested = [];
+  const seen = new Set();
+  const source = Array.isArray(enabled) && enabled.length ? enabled : DEFAULT_ENABLED;
+  for (const n of source) {
+    const key = String(n || "").trim().toLowerCase();
+    if (!key || key === "no_mcp" || off.has(key) || seen.has(key) || !isCatalogName(key)) {
+      continue;
+    }
+    seen.add(key);
+    requested.push(key);
+  }
+  if (requested.length === 0) {
+    return DEFAULT_ENABLED.filter((n) => !off.has(n));
+  }
+  return requested;
 }
 
 export function lowerSet(names) {

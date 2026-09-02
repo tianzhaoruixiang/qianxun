@@ -76,4 +76,14 @@ class TokenUsageMergeTest {
         assertThat(twice.get("contextUsed")).isEqualTo(950);
         assertThat(twice.get("live")).isEqualTo(true);
     }
+
+    @Test
+    void merge_shouldKeepGenerationMs() {
+        var billed = new OpenAiCompatibleStreamClient.TokenUsage(80, 10, 90, 128000);
+        Map<String, Object> once = TokenUsageMerge.accumulate(null, billed, 0);
+        once.put("generationMs", 12_000L);
+        var second = new OpenAiCompatibleStreamClient.TokenUsage(20, 5, 25, 128000);
+        Map<String, Object> twice = TokenUsageMerge.accumulate(once, second, 0);
+        assertThat(twice.get("generationMs")).isEqualTo(12_000L);
+    }
 }

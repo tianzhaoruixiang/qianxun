@@ -26,6 +26,7 @@ import {
   workspace as userWorkspace,
 } from "./paths.js";
 import { CATALOG, DEFAULT_ENABLED, expandEnabledToolsets, isCatalogName, lowerSet, toInfos } from "./toolsets.js";
+import { SOUL_APPEND_MAX } from "./systemAppend.js";
 
 function requireUserId(userId) {
   const uid = sanitizeOwnerId(userId);
@@ -159,7 +160,7 @@ async function copyProfileAssets(src, dest, { skipExisting = false, insideClaude
   return true;
 }
 
-/** 把目录里尚未出现在 disabled 中的工具集补进 enabled 并落盘。 */
+/** 规范化已落盘的 enabled/disabled；不再把未点开的目录项自动补进白名单。 */
 async function migrateToolsetsEnableMissing(home) {
   const file = toolsetsFile(home);
   const doc = await readJson(file, null);
@@ -566,8 +567,8 @@ export async function putSoul(userId, rawName, content) {
   requireUserId(userId);
   const name = normalizeProfileName(rawName);
   const text = content == null ? "" : String(content);
-  if (text.length > 80_000) {
-    return { ok: false, content: "", exists: false, message: "SOUL.md 过长（最多 80000 字）" };
+  if (text.length > SOUL_APPEND_MAX) {
+    return { ok: false, content: "", exists: false, message: `SOUL.md 过长（最多 ${SOUL_APPEND_MAX} 字）` };
   }
   const home = profileHome(name, userId);
   await fs.mkdir(home, { recursive: true });
@@ -776,18 +777,18 @@ export async function toggleToolset(userId, profile, toolsetName, enabled) {
   return { ok: true, name, enabled, message: "" };
 }
 
-export async function ensureDir(userId, absPath) {
+export async function ensureDir(userId, absPath, workspaceSessionId) {
   requireUserId(userId);
-  const p = resolveManaged(absPath, userId);
+  const p = resolveManaged(absPath, userId, workspaceSessionId);
   await fs.mkdir(p, { recursive: true });
   return { ok: true, path: p, message: "" };
 }
 
 const SKIP_WALK_DIRS = new Set(["node_modules", ".git", ".qianxun"]);
 
-export async function listDir(userId, absPath, recursive = false) {
+export async function listDir(userId, absPath, recursive = false, workspaceSessionId) {
   requireUserId(userId);
-  const p = resolveManaged(absPath, userId);
+  const p = resolveManaged(absPath, userId, workspaceSessionId);
   return walkDir(p, Boolean(recursive), 0, 5);
 }
 
@@ -837,9 +838,9 @@ async function walkDir(dir, recursive, depth, maxDepth) {
   return { ok: true, path: dir, entries: out, message: "" };
 }
 
-export async function writeFileBytes(userId, absPath, bytes) {
+export async function writeFileBytes(userId, absPath, bytes, workspaceSessionId) {
   requireUserId(userId);
-  const p = resolveManaged(absPath, userId);
+  const p = resolveManaged(absPath, userId, workspaceSessionId);
   const data = bytes || Buffer.alloc(0);
   if (data.length > 8 * 1024 * 1024) {
     return { ok: false, path: p, message: "单文件超过 8MiB" };
@@ -849,9 +850,9 @@ export async function writeFileBytes(userId, absPath, bytes) {
   return { ok: true, path: p, message: "" };
 }
 
-export async function readFileBytes(userId, absPath) {
+export async function readFileBytes(userId, absPath, workspaceSessionId) {
   requireUserId(userId);
-  const p = resolveManaged(absPath, userId);
+  const p = resolveManaged(absPath, userId, workspaceSessionId);
   try {
     const bytes = await fs.readFile(p);
     return { ok: true, bytes, filename: filenameOf(p), message: "" };

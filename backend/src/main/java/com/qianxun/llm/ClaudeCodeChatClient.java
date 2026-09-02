@@ -58,6 +58,7 @@ public class ClaudeCodeChatClient {
     public OpenAiCompatibleStreamClient.StreamCompletionMeta streamTurn(
             String cacheKey,
             String workspaceOwnerId,
+            String workspaceSessionId,
             String profile,
             ChatDashboardTurn.Plan plan,
             boolean awaitGoalContinuations,
@@ -82,6 +83,9 @@ public class ClaudeCodeChatClient {
         LinkedHashMap<String, Object> body = new LinkedHashMap<>();
         body.put("sessionId", cacheKey == null ? "" : cacheKey);
         body.put("userId", workspaceOwnerId == null ? "" : workspaceOwnerId);
+        body.put("workspaceSessionId", workspaceSessionId == null || workspaceSessionId.isBlank()
+                ? (cacheKey == null ? "" : cacheKey)
+                : workspaceSessionId.trim());
         body.put("profile", ClaudeCodePaths.normalizeProfileName(profile));
         body.put("prompt", buildPrompt(plan, "resume-unknown"));
         if (plan != null && plan.seedHistory() != null) {

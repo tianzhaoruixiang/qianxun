@@ -211,7 +211,7 @@ export function buildSdkMcpConfig(servers) {
   return { servers: out, allowedTools };
 }
 
-/** 同步 Claude Code 项目级 .mcp.json（供 settingSources 与 /mcp 命令读取） */
+/** 同步 Claude Code 项目级 .mcp.json（观测用；对话已 strictMcpConfig，不靠磁盘加载） */
 export async function syncMcpJsonFile(home, mcpServers) {
   const file = `${home}/.mcp.json`;
   await writeJson(file, { mcpServers: mcpServers || {} });
@@ -272,13 +272,13 @@ export async function signalDelegationCancel(userId, profile, delegationId) {
   }
 }
 
-export async function deleteManagedPath(userId, absPath) {
+export async function deleteManagedPath(userId, absPath, workspaceSessionId) {
   const uid = sanitizeOwnerId(userId);
   if (!uid) {
     return { ok: false, message: "用户标识无效" };
   }
   const { resolveManaged } = await import("./paths.js");
-  const p = resolveManaged(absPath, uid);
+  const p = resolveManaged(absPath, uid, workspaceSessionId);
   try {
     await fs.rm(p, { recursive: true, force: true });
     return { ok: true, path: p, message: "已删除" };
