@@ -1,0 +1,140 @@
+:root {
+  /* ===== 主色调 — 基于 UI 设计稿提取 ===== */
+  --color-primary: #3b82f6;
+  --color-primary-dark: #2563eb;
+  --color-primary-light: #93c5fd;
+
+  /* 强调色 */
+  --color-accent: #14b8a6;
+  --color-accent-glow: rgba(20, 184, 166, 0.3);
+
+  /* ===== 背景层次（偏苹果中性浅灰）===== */
+  --bg-base: #f5f5f7;
+  --bg-surface: #ffffff;
+  --bg-elevated: #f5f5f7;
+  --bg-glass: rgba(255, 255, 255, 0.72);
+
+  /* 聊天页毛玻璃（仅聊天表面复用，不影响市场/登录） */
+  --chat-glass: rgba(255, 255, 255, 0.62);
+  --chat-glass-strong: rgba(255, 255, 255, 0.82);
+  --chat-glass-border: rgba(15, 23, 42, 0.06);
+  --chat-chip-bg: rgba(255, 255, 255, 0.7);
+
+  /* ===== 文字层次：偏软、层次清晰 ===== */
+  --text-primary: #1f2937;
+  --text-secondary: #64748b;
+  --text-muted: #94a3b8;
+
+  /* ===== 边框与分割 ===== */
+  --border-subtle: rgba(0, 0, 0, 0.06);
+  --border-accent: rgba(0, 0, 0, 0.1);
+
+  /* ===== 卡片与输入（苹果风：干净表面 + 多层轻阴影）===== */
+  --card-bg: rgba(255, 255, 255, 0.92);
+  --card-bg-solid: #ffffff;
+  --card-border: rgba(0, 0, 0, 0.04);
+  --card-border-hover: rgba(0, 0, 0, 0.08);
+  --card-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.04),
+    0 4px 16px rgba(0, 0, 0, 0.04);
+  --card-shadow-hover:
+    0 2px 4px rgba(0, 0, 0, 0.04),
+    0 12px 32px rgba(0, 0, 0, 0.08);
+  --card-shadow-pressed:
+    0 1px 2px rgba(0, 0, 0, 0.05);
+  --input-bg: rgba(118, 118, 128, 0.08);
+
+  /* ===== 布局尺寸 ===== */
+  --sidebar-width: 290px;
+  --right-panel-width: 430px;
+  --header-height: 56px;
+  --input-area-height: 160px;
+
+  /* ===== 字体族：系统优质中文优先，Noto Sans SC 作开源兜底（简约无衬线） ===== */
+  --font-family-base:
+    "PingFang SC",
+    "Hiragino Sans GB",
+    "HarmonyOS Sans SC",
+    "HarmonyOS Sans",
+    "Noto Sans SC",
+    "Microsoft YaHei UI",
+    "Microsoft YaHei",
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    sans-serif;
+  --font-family-mono:
+    ui-monospace,
+    "SF Mono",
+    "SFMono-Regular",
+    "Cascadia Code",
+    "JetBrains Mono",
+    Menlo,
+    Monaco,
+    Consolas,
+    "Liberation Mono",
+    "Courier New",
+    monospace;
+  /* 仅用于品牌/装饰标题（仓库已有优设标题圆） */
+  --font-family-display: "YouSheBiaoTiYuan", var(--font-family-base);
+
+  /*
+   * 字号阶梯（rem，随 html 根字号按分辨率缩放）
+   * 基准 16px 根字号时约：12 / 13 / 14 / 15 / 18 / 22 / 28
+   * 正文偏紧凑：md≈14px，辅文 xs≈12px
+   */
+  --font-size-xs: 0.75rem;
+  --font-size-sm: 0.8125rem;
+  --font-size-md: 0.875rem;
+  --font-size-lg: 0.9375rem;
+  --font-size-xl: 1.125rem;
+  --font-size-xxl: 1.375rem;
+  --font-size-display: 1.75rem;
+
+  /* 图标尺寸：与字号阶梯对齐，按钮内默认用 sm */
+  --icon-size-xs: 14px;
+  --icon-size-sm: 16px;
+  --icon-size-md: 18px;
+  --icon-size-lg: 24px;
+  --icon-size-xl: 36px;
+  --icon-btn-size: 32px;
+  --icon-btn-size-sm: 28px;
+
+  /* 字重：正文 Regular，强调 Medium，标题 Semibold */
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+
+  /* 行高与字距：偏紧凑简约 */
+  --line-height-tight: 1.35;
+  --line-height-normal: 1.55;
+  --line-height-relaxed: 1.65;
+  --letter-spacing-tight: -0.01em;
+  --letter-spacing-body: 0.01em;
+  --letter-spacing-title: 0.02em;
+
+  /* ===== 圆角（偏苹果连续圆角观感）===== */
+  --radius-sm: 10px;
+  --radius-md: 16px;
+  --radius-lg: 22px;
+  --radius-xl: 28px;
+
+  /* ===== 阴影（中性、分层、低对比）===== */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04), 0 1px 3px rgba(0, 0, 0, 0.03);
+  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.06), 0 8px 24px rgba(0, 0, 0, 0.05);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.08), 0 20px 48px rgba(0, 0, 0, 0.06);
+
+  /* ===== 布局专用（基于 UI 设计稿）===== */
+  --sidebar-bg: #ffffff;
+  --sidebar-border: #e2e8f0;
+  --panel-bg: #ffffff;
+  --panel-text: #334155;
+  --nav-text-primary: #1e293b;
+  --nav-text-secondary: #64748b;
+  --input-area-bg: rgba(255, 255, 255, 0.92);
+
+  /* ===== 图表专用 ===== */
+  --chart-line-a: #3b82f6;
+  --chart-line-b: #14b8a6;
+  --chart-grid: #e2e8f0;
+}

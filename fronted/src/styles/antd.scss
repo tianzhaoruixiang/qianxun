@@ -1,0 +1,121 @@
+/* Ant Design 组件全局样式覆盖 */
+
+html,
+body,
+.ant-btn,
+.ant-input,
+.ant-input-affix-wrapper,
+.ant-select,
+.ant-select-dropdown,
+.ant-picker,
+.ant-dropdown,
+.ant-modal,
+.ant-drawer,
+.ant-form,
+.ant-menu,
+.ant-tooltip,
+.ant-message,
+.ant-empty,
+.ant-tag,
+.ant-checkbox-wrapper,
+.ant-switch {
+  font-family: var(--font-family-base) !important;
+}
+
+.ant-btn {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+  vertical-align: middle;
+
+  .ag-icon {
+    flex-shrink: 0;
+    line-height: 0;
+  }
+
+  > .anticon,
+  > span {
+    display: inline-flex;
+    align-items: center;
+    line-height: 1.25;
+  }
+}
+
+.ant-input-affix-wrapper,
+.ant-input-affix-wrapper .ant-input-prefix,
+.ant-input-affix-wrapper .ant-input-suffix {
+  align-items: center;
+}
+
+.ant-input-prefix .ag-icon,
+.ant-input-suffix .ag-icon {
+  display: inline-flex;
+  line-height: 0;
+}
+
+.ant-form-item-label > label {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-regular);
+  color: var(--text-secondary);
+}
+
+.ant-input,
+.ant-input-affix-wrapper,
+.ant-select-selector,
+.ant-input-number,
+.ant-picker {
+  font-size: var(--font-size-md);
+  color: var(--text-primary);
+}
+
+.ant-modal-title,
+.ant-drawer-title {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-primary);
+}
+
+.ant-collapse {
+    background: transparent;
+    border: none;
+
+    .ant-collapse-item {
+
+        >.ant-collapse-header {
+            padding: 8px 0 !important;
+            color: var(--text-primary) !important;
+            font-weight: var(--font-weight-semibold);
+            font-size: var(--font-size-md);
+
+            .ant-collapse-header-text {
+                flex: none;
+            }
+
+            .anticon {
+                color: var(--text-muted) !important;
+            }
+        }
+
+        >.ant-collapse-content-box {
+            padding: 4px 0 8px 0 !important;
+        }
+    }
+}
+
+.agent-register-modal {
+    .ant-modal-content {
+        border-radius: 16px;
+    }
+
+    .ant-modal-header {
+        border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .ant-form-item {
+        margin-bottom: 14px;
+    }
+}

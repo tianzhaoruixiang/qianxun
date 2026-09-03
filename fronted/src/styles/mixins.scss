@@ -1,0 +1,217 @@
+// 公共混入文件 - 数智干警
+// 可复用的样式片段
+
+// 响应式断点混入
+@mixin tablet {
+  @media (max-width: 1200px) {
+    @content;
+  }
+}
+
+@mixin mobile {
+  @media (max-width: 768px) {
+    @content;
+  }
+}
+
+// 弹性布局混入
+@mixin flex-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+@mixin flex-between {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+@mixin flex-column {
+  display: flex;
+  flex-direction: column;
+}
+
+// 过渡动画混入
+@mixin transition-base {
+  transition: all 0.2s ease-in-out;
+}
+
+@mixin transition-slow {
+  transition: all 0.3s ease-in-out;
+}
+
+// 排版混入（对齐全局 token）
+@mixin font-display {
+  font-family: var(--font-family-display);
+  font-weight: normal;
+}
+
+/** 纯图标按钮：固定方框 + 居中，避免图标相对文字基线偏移 */
+@mixin icon-btn($size: var(--icon-btn-size)) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: $size;
+  height: $size;
+  min-width: $size;
+  min-height: $size;
+  padding: 0;
+  margin: 0;
+  line-height: 0;
+  box-sizing: border-box;
+  vertical-align: middle;
+
+  .ag-icon,
+  img,
+  svg {
+    flex-shrink: 0;
+    display: block;
+  }
+}
+
+/** 图标 + 文字按钮：水平垂直居中，间距统一 */
+@mixin icon-text-btn($gap: 6px) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: $gap;
+  line-height: 1.25;
+  box-sizing: border-box;
+  vertical-align: middle;
+
+  .ag-icon,
+  .btn-icon,
+  img.btn-icon,
+  svg {
+    flex-shrink: 0;
+    display: block;
+    line-height: 0;
+  }
+}
+
+@mixin text-title {
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-tight);
+  color: var(--text-primary);
+}
+
+@mixin text-body {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-regular);
+  line-height: var(--line-height-relaxed);
+  color: var(--text-primary);
+}
+
+@mixin text-secondary {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-regular);
+  line-height: var(--line-height-normal);
+  color: var(--text-secondary);
+}
+
+@mixin text-caption {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-regular);
+  line-height: var(--line-height-normal);
+  color: var(--text-muted);
+}
+
+// 可滚轮滚动但视觉隐藏滚动条：条宽恒为 0，不挤占布局（配合 overflow-y: scroll 使空/满 clientWidth 一致）
+// 用 !important 压过 global.css 里 ::-webkit-scrollbar { width/height: 6px }
+@mixin hide-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  // 显式关闭 gutter，避免某处设 stable 后又隐藏条导致行为不一致
+  scrollbar-gutter: auto;
+
+  &::-webkit-scrollbar {
+    width: 0 !important;
+    height: 0 !important;
+    display: none !important;
+    background: transparent;
+  }
+
+  &::-webkit-scrollbar-thumb,
+  &::-webkit-scrollbar-track {
+    display: none !important;
+    width: 0 !important;
+    height: 0 !important;
+  }
+}
+
+// 文本截断混入
+@mixin text-ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@mixin text-ellipsis-lines($lines: 2) {
+  display: -webkit-box;
+  -webkit-line-clamp: $lines;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+// 卡片样式混入（苹果风：轻边、分层阴影、克制抬起）
+@mixin card-base {
+  background: var(--card-bg-solid, var(--card-bg));
+  border: 1px solid var(--card-border, var(--border-subtle));
+  border-radius: var(--radius-md);
+  box-shadow: var(--card-shadow);
+}
+
+@mixin market-card {
+  background: var(--card-bg-solid, var(--card-bg));
+  border: 1px solid var(--card-border, var(--border-subtle));
+  border-radius: var(--radius-md);
+  box-shadow: var(--card-shadow);
+  transition:
+    box-shadow 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+    transform 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 0.28s ease,
+    background 0.28s ease;
+
+  &:hover {
+    border-color: var(--card-border-hover, var(--border-accent));
+    box-shadow: var(--card-shadow-hover);
+    transform: translateY(-2px);
+  }
+
+  &:active {
+    transform: translateY(0);
+    box-shadow: var(--card-shadow-pressed, var(--shadow-sm));
+  }
+}
+
+@mixin market-disabled {
+  &.disabled {
+    background: rgba(118, 118, 128, 0.06);
+    border-style: solid;
+    border-color: var(--card-border, var(--border-subtle));
+    box-shadow: none;
+    filter: none;
+    opacity: 0.72;
+
+    &:hover {
+      transform: none;
+      box-shadow: none;
+      border-color: var(--card-border, var(--border-subtle));
+    }
+  }
+}
+
+// 按钮悬停效果混入
+@mixin button-hover {
+  &:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-md);
+  }
+
+  &:active {
+    transform: translateY(0);
+  }
+}

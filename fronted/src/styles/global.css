@@ -1,0 +1,177 @@
+/* 全局样式 - 数智干警 */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  /* 默认：≤1440 笔记本 / 小窗；字号 token 为 rem，随根字号放大 */
+  font-size: 16px;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  font-optical-sizing: auto;
+  font-synthesis: none;
+}
+
+/* 大屏笔记本 / 宽屏 */
+@media (min-width: 1440px) {
+  html {
+    font-size: 16.5px;
+  }
+}
+
+/* 1080p 全宽 / 常见桌面 */
+@media (min-width: 1920px) {
+  html {
+    font-size: 17px;
+  }
+}
+
+/* 2K / QHD */
+@media (min-width: 2560px) {
+  html {
+    font-size: 18px;
+  }
+}
+
+/* 4K（系统未缩放、CSS 宽度仍为 3840 时） */
+@media (min-width: 3840px) {
+  html {
+    font-size: 20px;
+  }
+}
+
+body {
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-regular);
+  line-height: var(--line-height-normal);
+  letter-spacing: var(--letter-spacing-body);
+  color: var(--text-primary);
+  background-color: var(--bg-base);
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  overscroll-behavior: none;
+  text-wrap: pretty;
+}
+
+#app {
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  display: flex;
+  font-family: inherit;
+  color: inherit;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(--font-family-base);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-tight);
+  letter-spacing: var(--letter-spacing-title);
+  color: var(--text-primary);
+  text-wrap: balance;
+}
+
+h1 { font-size: var(--font-size-xxl); }
+h2 { font-size: var(--font-size-xl); }
+h3 { font-size: var(--font-size-lg); }
+h4,
+h5,
+h6 { font-size: var(--font-size-md); }
+
+p {
+  font-size: var(--font-size-md);
+  line-height: var(--line-height-relaxed);
+}
+
+small,
+.caption,
+.muted {
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-normal);
+  color: var(--text-muted);
+}
+
+button,
+input,
+textarea,
+select,
+.ant-btn,
+.ant-input,
+.ant-select,
+.ant-picker,
+.ant-dropdown,
+.ant-modal,
+.ant-form,
+.ant-menu,
+.ant-tooltip,
+.ant-message {
+  font-family: var(--font-family-base);
+}
+
+button,
+.ant-btn {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
+  line-height: var(--line-height-tight);
+}
+
+input,
+textarea,
+select,
+.ant-input,
+.ant-input-affix-wrapper,
+.ant-select-selector {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-regular);
+  line-height: var(--line-height-normal);
+  color: var(--text-primary);
+}
+
+code,
+kbd,
+pre,
+samp {
+  font-family: var(--font-family-mono);
+}
+
+/* 滚动条样式 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-subtle);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* 选中文字样式 */
+::selection {
+  background: var(--color-primary-light);
+  color: white;
+}

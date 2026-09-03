@@ -1,0 +1,13 @@
+/* 正文字体：Noto Sans SC（OFL，简约无衬线）；系统有 PingFang / HarmonyOS 时优先用系统字体。 */
+@import url('https://cdn.jsdelivr.net/npm/@fontsource/noto-sans-sc@5.2.5/chinese-simplified-400.css');
+@import url('https://cdn.jsdelivr.net/npm/@fontsource/noto-sans-sc@5.2.5/chinese-simplified-500.css');
+@import url('https://cdn.jsdelivr.net/npm/@fontsource/noto-sans-sc@5.2.5/chinese-simplified-600.css');
+
+/* 仅加载仓库已有的装饰标题字体。不嵌入 PingFang 等商用包。 */
+@font-face {
+  font-family: 'YouSheBiaoTiYuan';
+  src: url('./YouSheBiaoTiYuan.otf') format('opentype');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
