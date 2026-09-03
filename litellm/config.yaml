@@ -92,6 +92,28 @@ model_list:
   - model_name: "claude-*"
     litellm_params: { <<: *openai_upstream }
     model_info: { <<: *no_reasoning }
+  # Mem0：embedding 必须在通配符 * 之前，否则会被当成 chat 模型打到上游
+  - model_name: text-embedding-3-small
+    litellm_params:
+      model: openai/text-embedding-v3
+      api_base: os.environ/OPENAI_UPSTREAM_BASE_URL
+      api_key: os.environ/OPENAI_UPSTREAM_API_KEY
+      drop_params: true
+  - model_name: text-embedding-v3
+    litellm_params:
+      model: openai/text-embedding-v3
+      api_base: os.environ/OPENAI_UPSTREAM_BASE_URL
+      api_key: os.environ/OPENAI_UPSTREAM_API_KEY
+      drop_params: true
+  - model_name: text-embedding-v2
+    litellm_params:
+      model: openai/text-embedding-v2
+      api_base: os.environ/OPENAI_UPSTREAM_BASE_URL
+      api_key: os.environ/OPENAI_UPSTREAM_API_KEY
+      drop_params: true
+  - model_name: gpt-4o-mini
+    litellm_params: { <<: *openai_upstream }
+    model_info: { <<: *no_reasoning }
   # 任意未知 model 名都转到同一 OpenAI Compatible 上游（litellm_params.model 仍是 LITELLM_UPSTREAM_MODEL）
   - model_name: "*"
     litellm_params: { <<: *openai_upstream }

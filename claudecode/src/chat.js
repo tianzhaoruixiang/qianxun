@@ -6,8 +6,8 @@ import {
   claudeMd,
   profileHome,
   sessionFile,
-  soulMd,
   workspace,
+  legacySessionCwd,
   sessionCwd,
 } from "./paths.js";
 import { allowedClaudeTools, DEFAULT_ENABLED, disallowedClaudeTools, disallowedClaudeToolsFromAllowlist, expandEnabledToolsets, lowerSet } from "./toolsets.js";
@@ -26,22 +26,20 @@ import {
   officerAllowedTools,
   officerBuiltinDelegationTools,
   officerHint,
+  withOfficerMcpTools,
 } from "./officerPolicy.js";
 import { buildSystemAppend, clipSoul } from "./systemAppend.js";
+import { applySeedHistory, isSlashPrompt } from "./promptSeed.js";
 import { SDK_SETTING_SOURCES, buildSystemPrompt, skillToolEnabled } from "./sdkOptions.js";
+import { emitContextUsageSnapshot } from "./contextUsage.js";
+import { memoryRecall } from "./memory/index.js";
 
 async function readProfileSoul(home) {
-  for (const file of [claudeMd(home), soulMd(home)]) {
-    try {
-      const text = clipSoul(await fs.readFile(file, "utf8"));
-      if (text) {
-        return text;
-      }
-    } catch {
-      /* next */
-    }
+  try {
+    return clipSoul(await fs.readFile(claudeMd(home), "utf8"));
+  } catch {
+    return "";
   }
-  return "";
 }
 
 const PROXY_ENV_KEYS = [
@@ -467,15 +465,18 @@ async function readSessionId(cwd, cacheKey, userId) {
   if (!userId || !cacheKey) {
     return "";
   }
-  try {
-    const legacy = sessionFile(workspace(userId), cacheKey);
-    const id = (await fs.readFile(legacy, "utf8")).trim();
-    if (id && id.length <= 128) {
-      await writeSessionId(cwd, cacheKey, id);
-      return id;
+  const legacyRoots = [workspace(userId), legacySessionCwd(userId, cacheKey)];
+  for (const root of legacyRoots) {
+    try {
+      const legacy = sessionFile(root, cacheKey);
+      const id = (await fs.readFile(legacy, "utf8")).trim();
+      if (id && id.length <= 128) {
+        await writeSessionId(cwd, cacheKey, id);
+        return id;
+      }
+    } catch {
+      /* 无旧映射 */
     }
-  } catch {
-    /* 无旧映射 */
   }
   return "";
 }
@@ -497,8 +498,8 @@ export async function streamTurn(body, writeLine, signal) {
   }
   const sessionId = body.sessionId || "";
   await createProfile(userId, profile, "");
-  const cwd = sessionCwd(userId, body.workspaceSessionId || sessionId);
   const home = profileHome(profile, userId);
+  const cwd = sessionCwd(userId, body.workspaceSessionId || sessionId, profile);
   await fs.mkdir(cwd, { recursive: true });
   await fs.mkdir(claudeHome(home), { recursive: true });
   await migrateLegacyClaudeHome(home);
@@ -506,11 +507,11 @@ export async function streamTurn(body, writeLine, signal) {
 
   const resumeId = await readSessionId(cwd, sessionId, userId);
   let prompt = body.prompt == null ? "" : String(body.prompt);
+  let historyAppend = "";
   if (!resumeId) {
-    const hist = transcript(body.seedHistory);
-    if (hist) {
-      prompt = `【会话历史】\n${hist}\n【本轮】\n${prompt}`;
-    }
+    const seeded = applySeedHistory(prompt, transcript(body.seedHistory));
+    prompt = seeded.prompt;
+    historyAppend = seeded.historyAppend;
   }
 
   const gw = await readToolsets(userId, profile);
@@ -522,12 +523,18 @@ export async function streamTurn(body, writeLine, signal) {
   let disallowed = disallowedClaudeTools(enabled);
   const skills = await listSkills(userId, profile);
   const enabledSkillInfos = skills.filter((s) => s.enabled);
-  const enabledSkills = enabledSkillInfos.map((s) => s.name);
+  const enabledSkills = [...new Set(enabledSkillInfos.flatMap((s) => (
+    Array.isArray(s.invokeNames) && s.invokeNames.length ? s.invokeNames : [s.name]
+  )))];
   const skillsOn = enabled.some((n) => String(n).toLowerCase() === "skills");
   const skillToolOn = skillToolEnabled(skillsOn, enabledSkills);
-  if (!skillToolOn) {
+  const slashDispatch = isSlashPrompt(prompt);
+  if (!skillToolOn && !slashDispatch) {
     tools = tools.filter((t) => t !== "Skill");
     disallowed = [...new Set([...disallowed, "Skill"])];
+  } else if (slashDispatch && !tools.includes("Skill")) {
+    tools = [...tools, "Skill"];
+    disallowed = disallowed.filter((t) => t !== "Skill");
   }
 
   const enabledSet = lowerSet(enabled);
@@ -558,17 +565,34 @@ export async function streamTurn(body, writeLine, signal) {
   const upstreamBaseUrl = resolveUpstreamBaseUrl(body);
   const upstreamApiKey = resolveUpstreamApiKey(body);
   const soul = await readProfileSoul(home);
-  let append = buildSystemAppend(cwd, soul, enabledSkillInfos);
   const officerMcp = buildOfficerMcp(body.orchestration);
+  const officerAppend = officerMcp ? officerHint(body.orchestration) : "";
+  const memory = await memoryRecall({
+    userId,
+    prompt,
+    body,
+    officer: Boolean(officerMcp),
+  });
+  if (memory.append || memory.degraded || memory.reason !== "disabled") {
+    console.log(
+      `[memory] recall reason=${memory.reason} hits=${memory.hits.length}`
+      + ` degraded=${memory.degraded} officer=${Boolean(officerMcp)}`,
+    );
+  }
+  const memoryBlock = memory.append ? `\n\n${memory.append}` : "";
+  let append = officerAppend + buildSystemAppend(cwd, soul, enabledSkillInfos) + memoryBlock + historyAppend;
   if (officerMcp) {
-    tools = applyOfficerLeanTools(tools, { skillsOn: skillToolOn });
+    tools = withOfficerMcpTools(applyOfficerLeanTools(tools, { skillsOn: skillToolOn || slashDispatch }));
     disallowed = [...new Set([
-      ...disallowedClaudeToolsFromAllowlist(tools),
+      ...disallowedClaudeToolsFromAllowlist(tools.filter((t) => !String(t).startsWith("mcp__"))),
       ...officerBuiltinDelegationTools(),
     ])];
-    append += officerHint(body.orchestration);
     mcpServers = { ...mcpServers, "qianxun-officer": officerMcp };
     mcpAllowedTools = [...mcpAllowedTools, ...officerAllowedTools()];
+    const agentCodes = Array.isArray(body.orchestration?.agents)
+      ? body.orchestration.agents.map((a) => (a && a.code ? String(a.code) : "")).filter(Boolean)
+      : [];
+    console.log(`[claude-code] officer mcp on agents=${agentCodes.join(",") || "-"} tools=${tools.join(",")}`);
   }
 
   const abortController = new AbortController();
@@ -634,8 +658,14 @@ export async function streamTurn(body, writeLine, signal) {
 
   let lastSession = resumeId;
   let sawResult = false;
+  const q = query({ prompt, options });
   try {
-    for await (const message of query({ prompt, options })) {
+    for await (const message of q) {
+      if (message && message.type === "system" && message.subtype === "init") {
+        const loaded = Array.isArray(message.skills) ? message.skills : [];
+        const names = loaded.map((s) => (typeof s === "string" ? s : (s && s.name) || "")).filter(Boolean);
+        console.log(`[claude-code] sdk init skills=${names.join(",") || "-"}`);
+      }
       if (message && message.session_id) {
         lastSession = message.session_id;
       }
@@ -645,6 +675,7 @@ export async function streamTurn(body, writeLine, signal) {
       writeLine(message);
       emitCompactIfNeeded(message, writeLine);
     }
+    await emitContextUsageSnapshot(q, writeLine, lastSession);
   } catch (ex) {
     if (abortController.signal.aborted) {
       writeLine({ type: "error", error: "客户端取消或连接中断" });

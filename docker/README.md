@@ -44,6 +44,8 @@ Claude Code sidecar  --Anthropic Messages-->  LiteLLM  --OpenAI Compatible-->  �
 | claude-code     | qianxun-claude-code   | 8642       | Claude Agent SDK：`/health`、`POST /v1/agent/stream`、profile/技能 REST |
 | qianxun-backend | qianxun-backend       | 8080       | Spring Boot（Java 21），HTTP 调用 sidecar |
 | qianxun-frontend| qianxun-frontend      | 80         | Vite 静态站 + nginx 反代 `/QianXunService` |
+| mem0-postgres   | qianxun-mem0-postgres | —          | **可选** `--profile mem0`：pgvector |
+| mem0            | qianxun-mem0          | 8888       | **可选** `--profile mem0`：本地 Mem0 REST（`/search`、`/docs`） |
 
 前端管理面路径仍是 `/QianXunService/hermes/*`，避免改 UI。
 
@@ -95,6 +97,32 @@ QIANXUN_CLAUDE_THINKING=disabled
 改完后 `docker compose up -d litellm claude-code`。
 
 若要 sidecar 直连 Anthropic Messages，把 `ANTHROPIC_BASE_URL` 改成厂商 Messages 地址，并把 `QIANXUN_CLAUDE_SDK_MODEL` / `ANTHROPIC_MODEL` 改成真实模型名。
+
+## Mem0 本地语义记忆（可选）
+
+默认 **不** 启动。需要时用 Compose profile：
+
+```bash
+cd docker
+# 首次可把 .env.example 里 Mem0 段合并进 .env
+docker compose --profile mem0 up -d --build mem0-postgres mem0
+# 打开召回：.env 设 QIANXUN_MEM0_ENABLED=true 后重建/重启 sidecar
+docker compose up -d claude-code
+```
+
+| 项 | 值 |
+|----|----|
+| API / OpenAPI | `http://127.0.0.1:8888/docs`（容器内 `http://mem0:8000`） |
+| 搜索 | `POST /search`（OSS，**无** `/v1/` 前缀） |
+| 向量库 | `mem0-postgres`（pgvector） |
+| LLM/Embedder | 默认 `MEM0_OPENAI_BASE_URL=http://litellm:4000/v1` |
+
+注意：
+- LiteLLM 上游必须能提供 **chat + embeddings**；默认 embedding 走 `text-embedding-v3`（百炼），向量维数 `MEM0_EMBEDDING_DIMS=1024`。换 embedding 模型后需清空 `data/mem0/postgres` 或 `DROP TABLE memories`。
+- sidecar 使用 `QIANXUN_MEM0_MODE=oss` + `QIANXUN_MEM0_BASE_URL=http://mem0:8000`。
+- 本地入口无鉴权，**不要**把 `8888` 暴露到公网。
+- 当前 Phase 1 仅召回；写入（`POST /memories`）在 Phase 2。
+- 构建若异常可用：`docker build -t qianxun/mem0:dev ./mem0`。
 
 ## 一键启动
 
@@ -210,11 +238,11 @@ cd docker && ./bin/down.sh && ./bin/up.sh
 ### Claude Code sidecar
 - **聊天**：后端 `POST {QIANXUN_CLAUDE_BASE_URL}/v1/agent/stream`，响应 `application/x-ndjson`，映射到现有 SSE（`token` / `tool` / `usage`）。
 - **会话续聊**：SDK `resume` session id 存在该会话 cwd 的 `.qianxun/claude-sessions/`（首次会从旧的用户级 workspace 映射回退），不靠长连接。
-- **管理面**：profile / `CLAUDE.md`（兼写 `SOUL.md`）/ 技能 / 工具集走 REST。
+- **管理面**：profile / `CLAUDE.md` / 技能 / 工具集走 REST。
 - **数智干警**：镜像内置 `claudecode/templates/profiles/default/CLAUDE.md`。每个用户在 `/opt/data/{userId}/profiles/default/` 有独立副本（`{{USER_ID}}` 会替换成该用户 id）。平台模板在 `/opt/data/_templates/profiles/default/`；仅当灵魂仍是占位文案时才会用内置稿覆盖，不冲掉管理员或用户已改过的人设。
 - **密钥**：视 `CLAUDE_UPSTREAM_MODE` 注入；可选 `CLAUDE_GATEWAY_KEY` 作为内网 Bearer。
 - **权限**：当前 `bypassPermissions` + `allowedTools`。
-- 路径：默认 profile `/opt/data/{userId}/profiles/default`，命名 profile `/opt/data/{userId}/profiles/{name}`，会话工作区 `/opt/data/{userId}/workspace/qx/{sessionId}`（子智能体 task 会话与父会话共用）。
+- 路径：默认 profile `/opt/data/{userId}/profiles/default`，命名 profile `/opt/data/{userId}/profiles/{name}`，会话工作区 `/opt/data/{userId}/profiles/{name}/workspace/{sessionId}`（子智能体 task 会话与父会话共用；旧版 `workspace/qx/{sessionId}` 仍可读）。
 
 ### 前端 SSE
 - nginx 已设 `proxy_buffering off / chunked_transfer_encoding off / X-Accel-Buffering: no`；浏览器对 `/QianXunService/*` 的请求由 nginx 透传至后端 8080，不存在跨域。

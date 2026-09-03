@@ -64,6 +64,15 @@ qianxun:
     # 干警等待子智能体结束的秒数，0=不限制
     orchestration-wait-seconds: ${QIANXUN_ORCHESTRATION_WAIT_SECONDS:0}
 
+  # 本地 Mem0（可选）。系统设置可改嵌入模型并 POST /configure/embedder
+  mem0:
+    enabled: ${QIANXUN_MEM0_ENABLED:false}
+    base-url: ${QIANXUN_MEM0_ADMIN_BASE_URL:${QIANXUN_MEM0_BASE_URL:http://mem0:8000}}
+    embedder-model: ${MEM0_EMBEDDER_MODEL:text-embedding-v3}
+    embedding-dims: ${MEM0_EMBEDDING_DIMS:1024}
+    # 空 = 保存系统设置时用上游 OpenAI Compatible Base URL；也可固定走 LiteLLM
+    openai-base-url: ${MEM0_OPENAI_BASE_URL:}
+
   # 旧 Hermes 运行器已停用，保留键以免残留环境变量报未知属性
   hermes:
     enabled: ${QIANXUN_HERMES_ENABLED:false}

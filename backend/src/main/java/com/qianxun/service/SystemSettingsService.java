@@ -2,6 +2,7 @@ package com.qianxun.service;
 
 import com.qianxun.config.QianxunProperties;
 import com.qianxun.context.UserContext;
+import com.qianxun.llm.Mem0AdminClient;
 import com.qianxun.llm.OpenAiModelsClient;
 import com.qianxun.repo.UiConfigRepository;
 import com.qianxun.web.dto.ListOpenAiModelsRequest;
@@ -23,6 +24,8 @@ public class SystemSettingsService {
     public static final String KEY_CLAUDE_CHAT_MODEL = "claude.chat_model";
     public static final String KEY_OPENAI_BASE_URL = "openai.upstream_base_url";
     public static final String KEY_OPENAI_API_KEY = "openai.upstream_api_key";
+    public static final String KEY_MEM0_EMBEDDER_MODEL = "mem0.embedder_model";
+    public static final String KEY_MEM0_EMBEDDING_DIMS = "mem0.embedding_dims";
     public static final String DEFAULT_SYSTEM_NAME = "数智干警";
 
     private static final int NAME_MAX = 32;
@@ -33,15 +36,18 @@ public class SystemSettingsService {
     private final UiConfigRepository uiConfigRepository;
     private final QianxunProperties properties;
     private final OpenAiModelsClient openAiModelsClient;
+    private final Mem0AdminClient mem0AdminClient;
 
     public SystemSettingsService(
             UiConfigRepository uiConfigRepository,
             QianxunProperties properties,
-            OpenAiModelsClient openAiModelsClient
+            OpenAiModelsClient openAiModelsClient,
+            Mem0AdminClient mem0AdminClient
     ) {
         this.uiConfigRepository = uiConfigRepository;
         this.properties = properties;
         this.openAiModelsClient = openAiModelsClient;
+        this.mem0AdminClient = mem0AdminClient;
     }
 
     public String resolvedSystemName() {
@@ -80,7 +86,31 @@ public class SystemSettingsService {
         return blankOr(properties.getClaude().getOpenaiUpstreamApiKey(), "");
     }
 
+    public String resolvedMem0EmbedderModel() {
+        String fromUi = stored(KEY_MEM0_EMBEDDER_MODEL);
+        if (!fromUi.isEmpty()) {
+            return stripProviderPrefix(fromUi);
+        }
+        return stripProviderPrefix(blankOr(properties.getMem0().getEmbedderModel(), "text-embedding-v3"));
+    }
+
+    public int resolvedMem0EmbeddingDims() {
+        String fromUi = stored(KEY_MEM0_EMBEDDING_DIMS);
+        if (!fromUi.isEmpty()) {
+            try {
+                return clampDims(Integer.parseInt(fromUi));
+            } catch (NumberFormatException ignored) {
+                /* fall through */
+            }
+        }
+        return clampDims(properties.getMem0().getEmbeddingDims());
+    }
+
     public SystemSettingsResponse snapshot() {
+        return snapshot("");
+    }
+
+    public SystemSettingsResponse snapshot(String mem0ApplyWarning) {
         boolean admin = UserContext.isAdmin();
         String key = admin ? resolvedOpenaiApiKey() : "";
         String model = resolvedClaudeChatModel();
@@ -92,7 +122,10 @@ public class SystemSettingsService {
                 admin ? resolvedOpenaiBaseUrl() : "",
                 admin ? maskApiKey(key) : "",
                 admin && !key.isEmpty(),
-                window
+                window,
+                admin ? resolvedMem0EmbedderModel() : "",
+                admin ? resolvedMem0EmbeddingDims() : null,
+                admin ? (mem0ApplyWarning == null ? "" : mem0ApplyWarning) : ""
         );
     }
 
@@ -104,6 +137,9 @@ public class SystemSettingsService {
         String model = body == null || body.claudeChatModel() == null ? "" : body.claudeChatModel().trim();
         String baseUrl = body == null || body.openaiBaseUrl() == null ? "" : body.openaiBaseUrl().trim();
         String apiKey = body == null || body.openaiApiKey() == null ? "" : body.openaiApiKey().trim();
+        String embedderModel = body == null || body.mem0EmbedderModel() == null
+                ? "" : body.mem0EmbedderModel().trim();
+        Integer embedderDims = body == null ? null : body.mem0EmbeddingDims();
         if (name.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "系统名称不能为空");
         }
@@ -125,6 +161,17 @@ public class SystemSettingsService {
         if (apiKey.length() > KEY_MAX || apiKey.chars().anyMatch(c -> c < 32)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "API Key 格式无效");
         }
+        if (!embedderModel.isEmpty()) {
+            if (embedderModel.length() > MODEL_MAX
+                    || !embedderModel.chars().allMatch(SystemSettingsService::allowedModelChar)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "嵌入模型标识格式无效");
+            }
+            embedderModel = stripProviderPrefix(embedderModel);
+            uiConfigRepository.upsert(KEY_MEM0_EMBEDDER_MODEL, embedderModel);
+        }
+        if (embedderDims != null) {
+            uiConfigRepository.upsert(KEY_MEM0_EMBEDDING_DIMS, String.valueOf(clampDims(embedderDims)));
+        }
         String fromEnv = blankOr(properties.getClaude().getChatModel(), "qwen3.6-plus");
         model = normalizeUpstreamModel(model, fromEnv);
         uiConfigRepository.upsert(KEY_SYSTEM_NAME, name);
@@ -133,7 +180,30 @@ public class SystemSettingsService {
         if (!apiKey.isEmpty() && !looksMasked(apiKey)) {
             uiConfigRepository.upsert(KEY_OPENAI_API_KEY, apiKey);
         }
-        return snapshot();
+
+        String warning = applyMem0EmbedderIfNeeded();
+        return snapshot(warning);
+    }
+
+    String applyMem0EmbedderIfNeeded() {
+        if (!mem0AdminClient.isConfigured()) {
+            return "";
+        }
+        String embedder = resolvedMem0EmbedderModel();
+        int dims = resolvedMem0EmbeddingDims();
+        String upstreamBase = resolvedOpenaiBaseUrl();
+        // 优先系统设置上游（任意 embedding id 可直打厂商）；未配置时回退 Mem0 专用 Base URL（如 LiteLLM）
+        String mem0OpenaiBase = upstreamBase.isEmpty()
+                ? rewriteLoopbackHost(blankOr(properties.getMem0().getOpenaiBaseUrl(), ""))
+                : upstreamBase;
+        String key = resolvedOpenaiApiKey();
+        return mem0AdminClient.applyEmbedder(
+                embedder,
+                dims,
+                mem0OpenaiBase,
+                key,
+                resolvedClaudeChatModel()
+        );
     }
 
     public OpenAiModelListResponse listUpstreamModels(ListOpenAiModelsRequest body) {
@@ -156,6 +226,25 @@ public class SystemSettingsService {
                         .map(i -> new OpenAiModelItemResponse(i.id(), i.contextWindow() > 0 ? i.contextWindow() : null))
                         .toList()
         );
+    }
+
+    /** 常见嵌入模型默认维数；未知则保持当前已解析维数。 */
+    public static int suggestEmbeddingDims(String model, int fallback) {
+        String m = stripProviderPrefix(model).toLowerCase(Locale.ROOT);
+        if (m.contains("text-embedding-3-large")) {
+            return 3072;
+        }
+        if (m.contains("text-embedding-3-small") || m.contains("text-embedding-ada") || m.equals("text-embedding-v2")) {
+            return 1536;
+        }
+        if (m.contains("text-embedding-v3") || m.contains("text-embedding-v4")) {
+            return 1024;
+        }
+        return clampDims(fallback);
+    }
+
+    static int clampDims(int dims) {
+        return Math.max(64, Math.min(8192, dims));
     }
 
     static String normalizeUpstreamModel(String raw, String envFallback) {

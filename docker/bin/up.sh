@@ -19,8 +19,11 @@ mkdir -p \
   data/doris/be/storage \
   data/doris/be/log  \
   data/minio \
-  data/claudecode
+  data/claudecode \
+  data/mem0/postgres \
+  data/mem0/history
 chmod -R a+rwX data/claudecode 2>/dev/null || true
+chmod -R a+rwX data/mem0 2>/dev/null || true
 
 # s3fs 要把 FUSE 挂载传播给 claude-code：先把 data 绑成独立挂载点再标 rshared
 DATA_DIR="$(pwd)/data"

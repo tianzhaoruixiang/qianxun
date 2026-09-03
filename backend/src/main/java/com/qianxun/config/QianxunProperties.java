@@ -13,6 +13,7 @@ public class QianxunProperties {
     private final Llm llm = new Llm();
     private final Hermes hermes = new Hermes();
     private final Claude claude = new Claude();
+    private final Mem0 mem0 = new Mem0();
     private final Auth auth = new Auth();
     private final Minio minio = new Minio();
     private final Cors cors = new Cors();
@@ -22,6 +23,7 @@ public class QianxunProperties {
     public Llm getLlm() { return llm; }
     public Hermes getHermes() { return hermes; }
     public Claude getClaude() { return claude; }
+    public Mem0 getMem0() { return mem0; }
     public Auth getAuth() { return auth; }
 
     /** 智能体运行器（Claude Code）是否启用。 */
@@ -123,6 +125,44 @@ public class QianxunProperties {
         public void setCommand(String command) { this.command = command; }
         public String getDataDir() { return dataDir; }
         public void setDataDir(String dataDir) { this.dataDir = dataDir; }
+    }
+
+    /**
+     * 本地 Mem0 语义记忆（可选）。系统设置可改嵌入模型并热更新到 Mem0。
+     */
+    public static class Mem0 {
+        /** 为 false 时系统设置不向 Mem0 推送配置。 */
+        private boolean enabled = false;
+        /** 例如 {@code http://mem0:8000}。 */
+        private String baseUrl = "";
+        private String embedderModel = "text-embedding-v3";
+        private int embeddingDims = 1024;
+        /**
+         * Mem0 调 embedding/LLM 的 OpenAI Compatible 根；空则保存系统设置时用上游 Base URL。
+         * 本地默认可走 LiteLLM：{@code http://litellm:4000/v1}。
+         */
+        private String openaiBaseUrl = "";
+
+        public boolean isEnabled() { return enabled; }
+        public void setEnabled(boolean enabled) { this.enabled = enabled; }
+        public String getBaseUrl() { return baseUrl; }
+        public void setBaseUrl(String baseUrl) { this.baseUrl = baseUrl == null ? "" : baseUrl; }
+        public String getEmbedderModel() { return embedderModel; }
+        public void setEmbedderModel(String embedderModel) {
+            this.embedderModel = embedderModel == null ? "" : embedderModel;
+        }
+        public int getEmbeddingDims() { return embeddingDims; }
+        public void setEmbeddingDims(int embeddingDims) {
+            this.embeddingDims = Math.max(64, Math.min(8192, embeddingDims));
+        }
+        public String getOpenaiBaseUrl() { return openaiBaseUrl; }
+        public void setOpenaiBaseUrl(String openaiBaseUrl) {
+            this.openaiBaseUrl = openaiBaseUrl == null ? "" : openaiBaseUrl;
+        }
+
+        public String resolvedBaseUrl() {
+            return baseUrl == null ? "" : baseUrl.trim().replaceAll("/+$", "");
+        }
     }
 
     public static class Hermes {

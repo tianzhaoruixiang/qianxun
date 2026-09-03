@@ -100,8 +100,8 @@ services:
       - http_proxy=
       - https_proxy=
       - all_proxy=
-      - NO_PROXY=litellm,claude-code,qianxun-backend,minio,tidb,localhost,127.0.0.1,host.docker.internal
-      - no_proxy=litellm,claude-code,qianxun-backend,minio,tidb,localhost,127.0.0.1,host.docker.internal
+      - NO_PROXY=litellm,claude-code,qianxun-backend,minio,tidb,mem0,mem0-postgres,localhost,127.0.0.1,host.docker.internal
+      - no_proxy=litellm,claude-code,qianxun-backend,minio,tidb,mem0,mem0-postgres,localhost,127.0.0.1,host.docker.internal
     volumes:
       - ../litellm/config.yaml:/app/config.yaml:ro
       - ../litellm/merge_leading_system.py:/app/merge_leading_system.py:ro
@@ -154,13 +154,22 @@ services:
       - http_proxy=
       - https_proxy=
       - all_proxy=
-      - NO_PROXY=litellm,claude-code,qianxun-backend,minio,tidb,localhost,127.0.0.1,host.docker.internal
-      - no_proxy=litellm,claude-code,qianxun-backend,minio,tidb,localhost,127.0.0.1,host.docker.internal
+      - NO_PROXY=litellm,claude-code,qianxun-backend,minio,tidb,mem0,mem0-postgres,localhost,127.0.0.1,host.docker.internal
+      - no_proxy=litellm,claude-code,qianxun-backend,minio,tidb,mem0,mem0-postgres,localhost,127.0.0.1,host.docker.internal
       - CLAUDE_GATEWAY_KEY=${CLAUDE_GATEWAY_KEY}
       - CLAUDE_GATEWAY_ALLOW_INSECURE=${CLAUDE_GATEWAY_ALLOW_INSECURE:-true}
       - QIANXUN_CLAUDE_MODEL=${QIANXUN_CLAUDE_MODEL}
       - QIANXUN_CLAUDE_PERMISSION_MODE=${QIANXUN_CLAUDE_PERMISSION_MODE}
       - QIANXUN_CLAUDE_THINKING=${QIANXUN_CLAUDE_THINKING}
+      # Mem0 语义记忆（需 compose --profile mem0；默认关闭）
+      - QIANXUN_MEM0_ENABLED=${QIANXUN_MEM0_ENABLED:-false}
+      - QIANXUN_MEM0_MODE=${QIANXUN_MEM0_MODE:-oss}
+      - QIANXUN_MEM0_BASE_URL=${QIANXUN_MEM0_BASE_URL:-http://mem0:8000}
+      - QIANXUN_MEM0_TIMEOUT_MS=${QIANXUN_MEM0_TIMEOUT_MS:-250}
+      - QIANXUN_MEM0_TOP_K=${QIANXUN_MEM0_TOP_K:-5}
+      - QIANXUN_MEM0_MAX_CHARS=${QIANXUN_MEM0_MAX_CHARS:-4000}
+      - QIANXUN_MEM0_APP_ID=${QIANXUN_MEM0_APP_ID:-qianxun}
+      - MEM0_API_KEY=${MEM0_API_KEY:-oss-local}
       # AIO 可选组件（内网可设 true 减负载；Chrome 浏览器已在镜像构建时关闭）
       - DISABLE_JUPYTER=${DISABLE_JUPYTER:-false}
       - DISABLE_CODE_SERVER=${DISABLE_CODE_SERVER:-false}
@@ -227,6 +236,13 @@ services:
       - QIANXUN_LLM_STREAM_TIMEOUT_SECONDS=${QIANXUN_LLM_STREAM_TIMEOUT_SECONDS}
       - JAVA_TOOL_OPTIONS=${JAVA_TOOL_OPTIONS}
       - QIANXUN_CORS_ALLOWED_ORIGIN_PATTERNS=${QIANXUN_CORS_ALLOWED_ORIGIN_PATTERNS}
+      # Mem0：系统设置热更新嵌入模型（需 --profile mem0）
+      - QIANXUN_MEM0_ENABLED=${QIANXUN_MEM0_ENABLED:-false}
+      - QIANXUN_MEM0_BASE_URL=${QIANXUN_MEM0_BASE_URL:-http://mem0:8000}
+      - QIANXUN_MEM0_ADMIN_BASE_URL=${QIANXUN_MEM0_ADMIN_BASE_URL:-http://mem0:8000}
+      - MEM0_EMBEDDER_MODEL=${MEM0_EMBEDDER_MODEL:-text-embedding-v3}
+      - MEM0_EMBEDDING_DIMS=${MEM0_EMBEDDING_DIMS:-1024}
+      - MEM0_OPENAI_BASE_URL=${MEM0_OPENAI_BASE_URL:-}
     ports:
       - "${QIANXUN_BACKEND_PORT}:8080"
     healthcheck:
@@ -256,6 +272,84 @@ services:
       timeout: 3s
       retries: 10
       start_period: 5s
+    networks:
+      - qianxun_net
+
+  # ── Mem0 本地语义记忆（可选：docker compose --profile mem0 up -d）──
+  mem0-postgres:
+    profiles: ["mem0"]
+    image: pgvector/pgvector:pg16
+    container_name: qianxun-mem0-postgres
+    restart: unless-stopped
+    shm_size: "128mb"
+    environment:
+      POSTGRES_USER: ${MEM0_POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${MEM0_POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${MEM0_POSTGRES_DB:-postgres}
+    volumes:
+      - ./data/mem0/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -q -d ${MEM0_POSTGRES_DB:-postgres} -U ${MEM0_POSTGRES_USER:-postgres}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    networks:
+      - qianxun_net
+
+  mem0:
+    profiles: ["mem0"]
+    image: qianxun/mem0:dev
+    container_name: qianxun-mem0
+    build:
+      context: ./mem0
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      mem0-postgres:
+        condition: service_healthy
+      litellm:
+        condition: service_healthy
+    environment:
+      - POSTGRES_HOST=mem0-postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=${MEM0_POSTGRES_DB:-postgres}
+      - POSTGRES_USER=${MEM0_POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${MEM0_POSTGRES_PASSWORD:-postgres}
+      - POSTGRES_COLLECTION_NAME=${MEM0_POSTGRES_COLLECTION:-memories}
+      - MEM0_EMBEDDING_DIMS=${MEM0_EMBEDDING_DIMS:-1024}
+      - HISTORY_DB_PATH=/app/history/history.db
+      # 走本栈 LiteLLM 的 OpenAI Compatible（抽取事实 + embedding）
+      - OPENAI_API_KEY=${MEM0_OPENAI_API_KEY:-sk-litellm-local}
+      - OPENAI_BASE_URL=${MEM0_OPENAI_BASE_URL:-http://litellm:4000/v1}
+      - MEM0_DEFAULT_LLM_MODEL=${MEM0_LLM_MODEL:-openai-default}
+      - MEM0_DEFAULT_EMBEDDER_MODEL=${MEM0_EMBEDDER_MODEL:-text-embedding-v3}
+      - HTTP_PROXY=
+      - HTTPS_PROXY=
+      - ALL_PROXY=
+      - http_proxy=
+      - https_proxy=
+      - all_proxy=
+      - NO_PROXY=litellm,mem0-postgres,claude-code,qianxun-backend,minio,tidb,localhost,127.0.0.1
+      - no_proxy=litellm,mem0-postgres,claude-code,qianxun-backend,minio,tidb,localhost,127.0.0.1
+    volumes:
+      - ./data/mem0/history:/app/history
+    ports:
+      - "${MEM0_PORT:-8888}:8000"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)\" || exit 1",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
     networks:
       - qianxun_net
 
