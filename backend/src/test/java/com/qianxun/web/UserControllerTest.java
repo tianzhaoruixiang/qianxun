@@ -38,7 +38,7 @@ class UserControllerTest {
     @Test
     void create_asAdmin_shouldReturnUserWithoutPassword() throws Exception {
         when(userService.createFunctionalUser(any())).thenReturn(
-                new UserResponse("abc", "operator", "业务员", null, true, UserRoles.FUNCTIONAL)
+                new UserResponse("2", "operator", "业务员", null, true, UserRoles.FUNCTIONAL)
         );
 
         mockMvc.perform(post("/QianXunService/users/create")
@@ -46,6 +46,7 @@ class UserControllerTest {
                         .content("{\"jsonArg\":{\"username\":\"operator\",\"password\":\"secret\",\"displayName\":\"业务员\"}}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(0))
+                .andExpect(jsonPath("$.data.id").value("2"))
                 .andExpect(jsonPath("$.data.username").value("operator"))
                 .andExpect(jsonPath("$.data.role").value("functional"))
                 .andExpect(jsonPath("$.data.passwordHash").doesNotExist())
