@@ -74,6 +74,22 @@ public class AppUserRepository {
         );
     }
 
+    /**
+     * 下一纯数字用户 id：表内现存纯数字 id 的 MAX+1；无则返回 "2"。
+     * 非纯数字 id（如旧 UUID）不参与计算。
+     */
+    public String nextNumericUserId() {
+        Long max = jdbc.queryForObject(
+                "SELECT MAX(CAST(`id` AS UNSIGNED)) FROM " + table
+                        + " WHERE `id` REGEXP '^[0-9]+$'",
+                Long.class
+        );
+        if (max == null || max < 1L) {
+            return "2";
+        }
+        return Long.toString(max + 1L);
+    }
+
     private static String emptyIfNull(String value) {
         return value == null ? "" : value;
     }
