@@ -14,7 +14,6 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
 import java.util.Optional;
-import java.util.UUID;
 
 @Service
 public class QianXunServiceUser {
@@ -88,23 +87,30 @@ public class QianXunServiceUser {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "用户名已存在");
         }
         Instant now = Instant.now();
-        String id = UUID.randomUUID().toString().replace("-", "");
-        AppUser user = new AppUser(
-                id,
-                username,
-                displayName,
-                passwordEncoder.encode(password),
-                UserRoles.FUNCTIONAL,
-                true,
-                now,
-                now
-        );
-        try {
-            userRepository.insert(user);
-        } catch (DuplicateKeyException ex) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "用户名已存在");
+        String passwordHash = passwordEncoder.encode(password);
+        final int maxAttempts = 3;
+        DuplicateKeyException lastDup = null;
+        for (int attempt = 0; attempt < maxAttempts; attempt++) {
+            String id = userRepository.nextNumericUserId();
+            AppUser user = new AppUser(
+                    id,
+                    username,
+                    displayName,
+                    passwordHash,
+                    UserRoles.FUNCTIONAL,
+                    true,
+                    now,
+                    now
+            );
+            try {
+                userRepository.insert(user);
+                return toResponse(user);
+            } catch (DuplicateKeyException ex) {
+                lastDup = ex;
+                // id 或 username 唯一冲突：重新取号再试；预检已挡住绝大多数 username 冲突
+            }
         }
-        return toResponse(user);
+        throw new ResponseStatusException(HttpStatus.CONFLICT, "用户名已存在", lastDup);
     }
 
     static UserResponse toResponse(AppUser user) {

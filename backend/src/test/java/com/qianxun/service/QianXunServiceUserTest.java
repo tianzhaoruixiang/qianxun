@@ -26,6 +26,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -50,16 +51,17 @@ class QianXunServiceUserTest {
     }
 
     @Test
-    void createFunctionalUser_asAdmin_shouldPersistHashedPasswordAndStableId() {
+    void createFunctionalUser_asAdmin_shouldPersistHashedPasswordAndNumericId() {
         when(userRepository.findByUsername("operator")).thenReturn(Optional.empty());
+        when(userRepository.nextNumericUserId()).thenReturn("2");
 
         UserResponse created = service.createFunctionalUser(new CreateUserRequest("operator", "secret", "业务员"));
 
         assertThat(created.username()).isEqualTo("operator");
         assertThat(created.displayName()).isEqualTo("业务员");
         assertThat(created.role()).isEqualTo(UserRoles.FUNCTIONAL);
-        assertThat(created.id()).isNotBlank();
-        assertThat(created.id()).doesNotContain("-");
+        assertThat(created.id()).isEqualTo("2");
+        assertThat(created.id()).matches("^\\d+$");
 
         ArgumentCaptor<AppUser> cap = ArgumentCaptor.forClass(AppUser.class);
         verify(userRepository).insert(cap.capture());
@@ -67,7 +69,7 @@ class QianXunServiceUserTest {
         assertThat(stored.passwordHash()).isNotEqualTo("secret");
         assertThat(passwordEncoder.matches("secret", stored.passwordHash())).isTrue();
         assertThat(stored.role()).isEqualTo(UserRoles.FUNCTIONAL);
-        assertThat(stored.id()).isEqualTo(created.id());
+        assertThat(stored.id()).isEqualTo("2");
     }
 
     @Test
@@ -93,14 +95,30 @@ class QianXunServiceUserTest {
     }
 
     @Test
-    void createFunctionalUser_duplicateKeyOnInsert_shouldConflict() {
+    void createFunctionalUser_duplicateKeyExhausted_shouldConflict() {
         when(userRepository.findByUsername("operator")).thenReturn(Optional.empty());
+        when(userRepository.nextNumericUserId()).thenReturn("2", "3", "4");
         doThrow(new DuplicateKeyException("dup")).when(userRepository).insert(any());
 
         assertThatThrownBy(() -> service.createFunctionalUser(new CreateUserRequest("operator", "p", "n")))
                 .isInstanceOf(ResponseStatusException.class)
                 .extracting(ex -> ((ResponseStatusException) ex).getStatusCode().value())
                 .isEqualTo(409);
+    }
+
+    @Test
+    void createFunctionalUser_idConflictThenRetry_shouldSucceed() {
+        when(userRepository.findByUsername("operator")).thenReturn(Optional.empty());
+        when(userRepository.nextNumericUserId()).thenReturn("2", "3");
+        doThrow(new DuplicateKeyException("id"))
+                .doNothing()
+                .when(userRepository).insert(any());
+
+        UserResponse created = service.createFunctionalUser(new CreateUserRequest("operator", "secret", "业务员"));
+
+        assertThat(created.id()).isEqualTo("3");
+        verify(userRepository, times(2)).insert(any());
+        verify(userRepository, times(2)).nextNumericUserId();
     }
 
     @Test
