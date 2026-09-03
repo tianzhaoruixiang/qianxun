@@ -9,6 +9,8 @@ import java.util.Map;
  *   <li>OpenAI：同轮多次请求做加法；占用取最近一次 prompt。</li>
  *   <li>Dashboard 会话快照（{@code sessionSnapshot}）：input/output/total 已是会话累计，
  *       只保留最新一帧；占用优先用 {@code context_used}/{@code context_percent}。</li>
+ *   <li>Claude Code {@code context_usage}（{@code contextSnapshot}）：只刷新上下文窗口与 cache，
+ *       不改变本轮计费累加。</li>
  * </ul>
  */
 public final class TokenUsageMerge {
@@ -26,6 +28,9 @@ public final class TokenUsageMerge {
         }
         if (usage.liveOccupancy()) {
             return mergeLiveOccupancy(previous, usage, fallbackContextWindow);
+        }
+        if (usage.contextSnapshot()) {
+            return mergeContextSnapshot(previous, usage, fallbackContextWindow);
         }
         if (usage.sessionSnapshot() || boolVal(previous, "sessionSnapshot")) {
             return mergeSnapshot(previous, usage, fallbackContextWindow);
@@ -59,44 +64,45 @@ public final class TokenUsageMerge {
         data.put("contextUsed", contextUsed);
         data.put("contextPercent", percent);
         data.put("sessionSnapshot", true);
+        applyClaudeExtras(previous, data, usage);
         copyGenerationMs(previous, data);
         return data;
     }
 
-    /** 流式中间帧：只刷新当前窗口占用，不把中间 API 调用加进本轮计费。 */
+    /** Claude SDK getContextUsage：只刷新上下文占用，计费字段沿用 previous。 */
+    private static Map<String, Object> mergeContextSnapshot(
+            Map<String, Object> previous,
+            OpenAiCompatibleStreamClient.TokenUsage usage,
+            int fallbackContextWindow
+    ) {
+        Map<String, Object> data = previous == null ? new LinkedHashMap<>() : new LinkedHashMap<>(previous);
+        int window = pickWindow(usage.contextWindow(), previous, fallbackContextWindow);
+        int contextUsed = pickSnapshot(usage.contextUsed(), intVal(previous, "contextUsed"));
+        double percent = usage.contextPercent() != null
+                ? clampPercent(usage.contextPercent())
+                : (window > 0 && contextUsed > 0
+                        ? clampPercent(contextUsed * 100.0 / window)
+                        : doubleVal(previous, "contextPercent"));
+        data.put("contextWindow", window);
+        data.put("contextUsed", contextUsed);
+        data.put("contextPercent", percent);
+        data.put("contextSnapshot", true);
+        data.remove("live");
+        data.remove("liveOutputTokens");
+        applyClaudeExtras(previous, data, usage);
+        return data;
+    }
+
+    /** 流式中间帧：标记 live，不把 API input_tokens 当成上下文窗口占用。 */
     private static Map<String, Object> mergeLiveOccupancy(
             Map<String, Object> previous,
             OpenAiCompatibleStreamClient.TokenUsage usage,
             int fallbackContextWindow
     ) {
-        int prompt = nz(usage.promptTokens());
-        int completion = nz(usage.completionTokens());
-        int prevUsed = intVal(previous, "contextUsed");
-        int prevOut = intVal(previous, "liveOutputTokens");
-        int occupied;
-        if (usage.contextUsed() != null && usage.contextUsed() > 0) {
-            occupied = usage.contextUsed();
-        } else if (prompt > 0) {
-            occupied = prompt + completion;
-        } else if (completion > 0 && prevUsed > 0) {
-            occupied = Math.max(completion, prevUsed - prevOut + completion);
-        } else {
-            occupied = prevUsed;
-        }
         int window = pickWindow(usage.contextWindow(), previous, fallbackContextWindow);
-        int contextUsed = occupied > 0 ? occupied : intVal(previous, "contextUsed");
-        double percent = window > 0 && contextUsed > 0
-                ? clampPercent(contextUsed * 100.0 / window)
-                : doubleVal(previous, "contextPercent");
-
         Map<String, Object> data = previous == null ? new LinkedHashMap<>() : new LinkedHashMap<>(previous);
         data.put("contextWindow", window);
-        data.put("contextUsed", contextUsed);
-        data.put("contextPercent", percent);
         data.put("live", true);
-        if (completion > 0) {
-            data.put("liveOutputTokens", completion);
-        }
         return data;
     }
 
@@ -115,24 +121,79 @@ public final class TokenUsageMerge {
         int sumPrompt = intVal(previous, "promptTokens") + prompt;
         int sumCompletion = intVal(previous, "completionTokens") + completion;
         int sumTotal = intVal(previous, "totalTokens") + total;
-        int contextUsed = pickLatest(usage.contextUsed(), prompt > 0 ? prompt : intVal(previous, "contextUsed"));
-        double percent = usage.contextPercent() != null
-                ? clampPercent(usage.contextPercent())
-                : (window > 0 && contextUsed > 0 ? clampPercent(contextUsed * 100.0 / window) : 0.0);
+        // contextUsed 仅由 context_usage（contextSnapshot）写入；result/live 的 input_tokens 不是窗口占用
+        int contextUsed = intVal(previous, "contextUsed");
+        double percent = contextUsed > 0 && window > 0
+                ? clampPercent(contextUsed * 100.0 / window)
+                : doubleVal(previous, "contextPercent");
 
-        Map<String, Object> data = new LinkedHashMap<>();
+        Map<String, Object> data = previous == null ? new LinkedHashMap<>() : new LinkedHashMap<>(previous);
         data.put("promptTokens", sumPrompt);
         data.put("completionTokens", sumCompletion);
         data.put("totalTokens", sumTotal);
         data.put("contextWindow", window);
-        data.put("contextUsed", contextUsed);
-        data.put("contextPercent", percent);
+        if (contextUsed > 0) {
+            data.put("contextUsed", contextUsed);
+            data.put("contextPercent", percent);
+        } else {
+            data.remove("contextUsed");
+            data.remove("contextPercent");
+        }
+        applyClaudeExtras(previous, data, usage);
         copyGenerationMs(previous, data);
         return data;
     }
 
+    private static void applyClaudeExtras(
+            Map<String, Object> previous,
+            Map<String, Object> data,
+            OpenAiCompatibleStreamClient.TokenUsage usage
+    ) {
+        if (usage.treePromptTokens() != null) {
+            data.put("treePromptTokens", usage.treePromptTokens());
+        } else {
+            copyField(previous, data, "treePromptTokens");
+        }
+        if (usage.treeCompletionTokens() != null) {
+            data.put("treeCompletionTokens", usage.treeCompletionTokens());
+        } else {
+            copyField(previous, data, "treeCompletionTokens");
+        }
+        if (usage.totalCostUsd() != null && usage.totalCostUsd() >= 0) {
+            data.put("totalCostUsd", usage.totalCostUsd());
+        } else {
+            copyField(previous, data, "totalCostUsd");
+        }
+        if (usage.cacheReadTokens() != null) {
+            data.put("cacheReadTokens", usage.cacheReadTokens());
+        } else {
+            copyField(previous, data, "cacheReadTokens");
+        }
+        if (usage.cacheCreationTokens() != null) {
+            data.put("cacheCreationTokens", usage.cacheCreationTokens());
+        } else {
+            copyField(previous, data, "cacheCreationTokens");
+        }
+        if (usage.durationMs() != null && usage.durationMs() >= 0) {
+            data.put("generationMs", usage.durationMs());
+        }
+    }
+
+    private static void copyField(Map<String, Object> previous, Map<String, Object> data, String key) {
+        if (previous == null || data.containsKey(key)) {
+            return;
+        }
+        Object v = previous.get(key);
+        if (v != null) {
+            data.put(key, v);
+        }
+    }
+
     private static void copyGenerationMs(Map<String, Object> previous, Map<String, Object> data) {
-        if (previous == null || data.containsKey("generationMs")) {
+        if (data.containsKey("generationMs")) {
+            return;
+        }
+        if (previous == null) {
             return;
         }
         Object v = previous.get("generationMs");

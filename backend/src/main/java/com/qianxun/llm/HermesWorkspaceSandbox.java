@@ -6,8 +6,8 @@ package com.qianxun.llm;
  * 每个用户独占 {@code /opt/data/{userId}/}：
  * <ul>
  *   <li>{@code profiles/{profileName}/} — CLAUDE.md、技能、子智能体 profile（会话间共享）</li>
- *   <li>{@code workspace/} — 用户工作区根，不再作为 cwd</li>
- *   <li>{@code workspace/qx/{sessionId}/} — 每个用户可见多轮会话的独立 cwd</li>
+ *   <li>{@code profiles/{profileName}/workspace/{sessionId}/} — 该智能体会话的独立 cwd</li>
+ *   <li>{@code workspace/qx/{sessionId}/} — 旧版会话 cwd（仅兼容读取）</li>
  * </ul>
  */
 public final class HermesWorkspaceSandbox {
@@ -53,19 +53,34 @@ public final class HermesWorkspaceSandbox {
     }
 
     /**
-     * 会话 cwd：{@code /opt/data/{userId}/workspace/qx/{workspaceSessionId}}。
-     * {@code workspaceSessionId} 应是用户可见会话 id（task-* 须先解析到父会话）。
+     * 旧会话 cwd：{@code /opt/data/{userId}/workspace/qx/{workspaceSessionId}}。
      */
-    public static String sessionCwd(String qianxunUserId, String workspaceSessionId) {
-        return sessionCwd(DEFAULT_HOME, qianxunUserId, workspaceSessionId);
+    public static String legacySessionCwd(String qianxunUserId, String workspaceSessionId) {
+        return legacySessionCwd(DEFAULT_HOME, qianxunUserId, workspaceSessionId);
     }
 
-    public static String sessionCwd(String dataDir, String qianxunUserId, String workspaceSessionId) {
+    public static String legacySessionCwd(String dataDir, String qianxunUserId, String workspaceSessionId) {
         String sid = sanitizeSessionId(workspaceSessionId);
         if (sid.isBlank()) {
             sid = "default";
         }
         return workspacePath(dataDir, qianxunUserId) + "/" + SESSION_DIR + "/" + sid;
+    }
+
+    /**
+     * 会话 cwd：{@code /opt/data/{userId}/profiles/{profile}/workspace/{workspaceSessionId}}。
+     * {@code workspaceSessionId} 应是用户可见会话 id（task-* 须先解析到父会话）。
+     */
+    public static String sessionCwd(String qianxunUserId, String hermesProfile, String workspaceSessionId) {
+        return sessionCwd(DEFAULT_HOME, qianxunUserId, hermesProfile, workspaceSessionId);
+    }
+
+    public static String sessionCwd(String dataDir, String qianxunUserId, String hermesProfile, String workspaceSessionId) {
+        String sid = sanitizeSessionId(workspaceSessionId);
+        if (sid.isBlank()) {
+            sid = "default";
+        }
+        return profileHome(dataDir, qianxunUserId, hermesProfile) + "/workspace/" + sid;
     }
 
     /**

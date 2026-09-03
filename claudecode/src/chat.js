@@ -32,7 +32,7 @@ import { buildSystemAppend, clipSoul } from "./systemAppend.js";
 import { applySeedHistory, isSlashPrompt } from "./promptSeed.js";
 import { SDK_SETTING_SOURCES, buildSystemPrompt, skillToolEnabled } from "./sdkOptions.js";
 import { emitContextUsageSnapshot } from "./contextUsage.js";
-import { memoryRecall } from "./memory/index.js";
+import { memoryRecall, memoryPersist, accumulateAssistantText } from "./memory/index.js";
 
 async function readProfileSoul(home) {
   try {
@@ -658,6 +658,8 @@ export async function streamTurn(body, writeLine, signal) {
 
   let lastSession = resumeId;
   let sawResult = false;
+  let turnOk = false;
+  const assistantState = { text: "", fromStream: false };
   const q = query({ prompt, options });
   try {
     for await (const message of q) {
@@ -671,7 +673,9 @@ export async function streamTurn(body, writeLine, signal) {
       }
       if (message && message.type === "result" && !message.parent_tool_use_id && !message.parentToolUseId) {
         sawResult = true;
+        turnOk = !(message.is_error || message.subtype === "error");
       }
+      accumulateAssistantText(assistantState, message);
       writeLine(message);
       emitCompactIfNeeded(message, writeLine);
     }
@@ -688,11 +692,33 @@ export async function streamTurn(body, writeLine, signal) {
     await writeSessionId(cwd, sessionId, lastSession);
   }
   if (!sawResult) {
+    turnOk = true;
     writeLine({
       type: "result",
       subtype: "success",
       session_id: lastSession || "",
       is_error: false,
     });
+  }
+
+  // Phase 2：异步固化，不 await 完成，避免拖慢响应
+  try {
+    const persisted = await memoryPersist({
+      userId,
+      prompt,
+      assistantText: assistantState.text,
+      body,
+      officer: Boolean(officerMcp),
+      ok: turnOk,
+      sessionId: lastSession || sessionId || "",
+    });
+    if (persisted.reason !== "disabled") {
+      console.log(
+        `[memory] persist reason=${persisted.reason} jobs=${persisted.jobs}`
+        + ` enqueued=${persisted.enqueued} chars=${String(assistantState.text || "").length}`,
+      );
+    }
+  } catch (err) {
+    console.warn(`[memory] persist schedule failed: ${err?.message || err}`);
   }
 }

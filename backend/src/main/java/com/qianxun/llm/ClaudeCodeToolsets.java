@@ -50,8 +50,8 @@ public final class ClaudeCodeToolsets {
                     List.of("AskUserQuestion", "ToolSearch", "EnterPlanMode", "ExitPlanMode"))
     );
 
-    /** 缺省只开文件与技能；终端/网页/委派等需在工具市场显式打开。 */
-    public static final List<String> DEFAULT_ENABLED = List.of("file", "skills");
+    /** 缺省打开目录内全部 Claude Code 工具集。 */
+    public static final List<String> DEFAULT_ENABLED = CATALOG.stream().map(Def::name).toList();
 
     public static boolean isDefaultEnabled(String name) {
         if (name == null || name.isBlank()) {

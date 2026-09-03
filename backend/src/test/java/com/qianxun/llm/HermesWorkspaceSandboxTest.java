@@ -39,12 +39,12 @@ class HermesWorkspaceSandboxTest {
 
     @Test
     void differentSessionsGetDifferentCwds() {
-        assertThat(HermesWorkspaceSandbox.sessionCwd("user-01", "sess-a"))
-                .isEqualTo("/opt/data/user-01/workspace/qx/sess-a");
-        assertThat(HermesWorkspaceSandbox.sessionCwd("user-01", "sess-b"))
-                .isEqualTo("/opt/data/user-01/workspace/qx/sess-b");
-        assertThat(HermesWorkspaceSandbox.sessionCwd("user-01", "sess-a"))
-                .isNotEqualTo(HermesWorkspaceSandbox.sessionCwd("user-01", "sess-b"));
+        assertThat(HermesWorkspaceSandbox.sessionCwd("user-01", "baoxiaozhushou", "sess-a"))
+                .isEqualTo("/opt/data/user-01/profiles/baoxiaozhushou/workspace/sess-a");
+        assertThat(HermesWorkspaceSandbox.sessionCwd("user-01", "baoxiaozhushou", "sess-b"))
+                .isEqualTo("/opt/data/user-01/profiles/baoxiaozhushou/workspace/sess-b");
+        assertThat(HermesWorkspaceSandbox.sessionCwd("user-01", "baoxiaozhushou", "sess-a"))
+                .isNotEqualTo(HermesWorkspaceSandbox.sessionCwd("user-01", "baoxiaozhushou", "sess-b"));
     }
 
     @Test
@@ -53,15 +53,22 @@ class HermesWorkspaceSandboxTest {
                 .isEqualTo("sess-root");
         assertThat(HermesWorkspaceSandbox.sessionCwd(
                 "user-01",
+                "default",
                 HermesWorkspaceSandbox.workspaceSessionId("task-abc", "sess-root")))
-                .isEqualTo("/opt/data/user-01/workspace/qx/sess-root");
+                .isEqualTo("/opt/data/user-01/profiles/default/workspace/sess-root");
     }
 
     @Test
     void sessionCwdRejectsUnsafeSessionId() {
         assertThat(HermesWorkspaceSandbox.sanitizeSessionId("../etc")).isEmpty();
-        assertThat(HermesWorkspaceSandbox.sessionCwd("user-01", "../x"))
-                .isEqualTo("/opt/data/user-01/workspace/qx/default");
+        assertThat(HermesWorkspaceSandbox.sessionCwd("user-01", "default", "../x"))
+                .isEqualTo("/opt/data/user-01/profiles/default/workspace/default");
+    }
+
+    @Test
+    void legacySessionCwdKeepsOldLayout() {
+        assertThat(HermesWorkspaceSandbox.legacySessionCwd("user-01", "sess-a"))
+                .isEqualTo("/opt/data/user-01/workspace/qx/sess-a");
     }
 
     @Test

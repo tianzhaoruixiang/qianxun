@@ -18,7 +18,7 @@ public record UpsertAgentRegistryRequest(
         /** 绑定的 Hermes profile；null 表示更新时保留 */
         String hermesProfile,
         /**
-         * Hermes profile 的 SOUL.md，必填。
+         * Claude Code profile 的 CLAUDE.md 人设内容，必填。
          */
         String soulMd,
         Integer priority,

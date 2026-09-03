@@ -98,7 +98,7 @@ class ClaudeCodeStreamParserTest {
     }
 
     @Test
-    void assistant_shouldEmitLiveUsage() throws Exception {
+    void assistant_shouldEmitLiveUsageWithoutContextUsed() throws Exception {
         ClaudeCodeStreamParser.ParseResult r = parser.accept("""
                 {"type":"assistant","session_id":"s","message":{
                   "usage":{"input_tokens":1000,"output_tokens":40},
@@ -109,7 +109,7 @@ class ClaudeCodeStreamParserTest {
         assertThat(r.usage().liveOccupancy()).isTrue();
         assertThat(r.usage().promptTokens()).isEqualTo(1000);
         assertThat(r.usage().completionTokens()).isEqualTo(40);
-        assertThat(r.usage().contextUsed()).isEqualTo(1040);
+        assertThat(r.usage().contextUsed()).isNull();
     }
 
     @Test
@@ -229,5 +229,37 @@ class ClaudeCodeStreamParserTest {
                 {"type":"system","subtype":"status","status":"compacting","session_id":"s"}
                 """);
         assertThat(r.compact().phase()).isEqualTo("start");
+    }
+
+    @Test
+    void contextUsage_shouldExposeContextSnapshot() throws Exception {
+        ClaudeCodeStreamParser.ParseResult r = parser.accept("""
+                {"type":"context_usage","session_id":"s","totalTokens":42000,"maxTokens":200000,
+                 "percentage":21,"apiUsage":{"cache_read_input_tokens":8000,"cache_creation_input_tokens":1000}}
+                """);
+        assertThat(r.usage()).isNotNull();
+        assertThat(r.usage().contextSnapshot()).isTrue();
+        assertThat(r.usage().contextUsed()).isEqualTo(42000);
+        assertThat(r.usage().contextWindow()).isEqualTo(200000);
+        assertThat(r.usage().cacheReadTokens()).isEqualTo(8000);
+        assertThat(r.usage().cacheCreationTokens()).isEqualTo(1000);
+        assertThat(r.resultDone()).isFalse();
+    }
+
+    @Test
+    void result_shouldParseModelUsageCostAndDuration() throws Exception {
+        ClaudeCodeStreamParser.ParseResult r = parser.accept("""
+                {"type":"result","subtype":"success","session_id":"s",
+                 "usage":{"input_tokens":100,"output_tokens":20},
+                 "modelUsage":{"claude-sonnet-4-5":{"inputTokens":180,"outputTokens":40}},
+                 "total_cost_usd":0.0123,"duration_ms":4500}
+                """);
+        assertThat(r.resultDone()).isTrue();
+        assertThat(r.usage().promptTokens()).isEqualTo(100);
+        assertThat(r.usage().completionTokens()).isEqualTo(20);
+        assertThat(r.usage().treePromptTokens()).isEqualTo(180);
+        assertThat(r.usage().treeCompletionTokens()).isEqualTo(40);
+        assertThat(r.usage().totalCostUsd()).isEqualTo(0.0123);
+        assertThat(r.usage().durationMs()).isEqualTo(4500L);
     }
 }

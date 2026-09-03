@@ -102,6 +102,9 @@ public final class ClaudeCodeStreamParser {
             Integer pre = intOrNull(n, "preTokens", "pre_tokens");
             return compactResult(sessionId, phase, trigger, pre);
         }
+        if ("context_usage".equals(type)) {
+            return parseContextUsage(n, sessionId);
+        }
         if ("heartbeat".equals(type) || "keepalive".equals(type) || "ping".equals(type)) {
             return ParseResult.empty();
         }
@@ -238,8 +241,120 @@ public final class ClaudeCodeStreamParser {
             err = firstNonBlank(text(n, "error"), text(n, "result"), "Claude Code 运行失败");
             finish = "error";
         }
-        TokenUsage usage = usageOf(n.path("usage"), n.path("modelUsage"), false);
+        TokenUsage usage = usageFromResult(n);
         return new ParseResult("", List.of(), usage, sessionId, true, err, finish);
+    }
+
+    private ParseResult parseContextUsage(JsonNode n, String sessionId) {
+        Integer total = intOrNull(n, "totalTokens");
+        Integer max = intOrNull(n, "maxTokens");
+        Double percent = doubleOrNull(n, "percentage");
+        JsonNode api = n.path("apiUsage");
+        Integer cacheRead = intOrNull(api, "cache_read_input_tokens");
+        Integer cacheCreate = intOrNull(api, "cache_creation_input_tokens");
+        if (total == null && max == null && percent == null && cacheRead == null && cacheCreate == null) {
+            return ParseResult.empty();
+        }
+        double pct = percent != null
+                ? percent
+                : (max != null && max > 0 && total != null && total > 0
+                        ? total * 100.0 / max
+                        : null);
+        TokenUsage usage = new TokenUsage(
+                null,
+                null,
+                null,
+                max,
+                total,
+                pct,
+                false,
+                false,
+                true,
+                null,
+                null,
+                null,
+                cacheRead,
+                cacheCreate,
+                null
+        );
+        return new ParseResult("", List.of(), usage, sessionId, false, "", "");
+    }
+
+    private TokenUsage usageFromResult(JsonNode n) {
+        JsonNode usageNode = n.path("usage");
+        JsonNode modelUsageNode = n.path("modelUsage");
+        Integer in = intOrNull(usageNode, "input_tokens", "prompt_tokens");
+        Integer out = intOrNull(usageNode, "output_tokens", "completion_tokens");
+        Integer total = intOrNull(usageNode, "total_tokens");
+        int[] tree = sumModelUsage(modelUsageNode);
+        Integer treeIn = tree[0] > 0 ? tree[0] : null;
+        Integer treeOut = tree[1] > 0 ? tree[1] : null;
+        if (in == null && out == null && treeIn != null) {
+            in = treeIn;
+            out = treeOut;
+            total = treeIn + (treeOut == null ? 0 : treeOut);
+        }
+        Integer cacheRead = firstCacheInt(usageNode, "cache_read_input_tokens");
+        Integer cacheCreate = firstCacheInt(usageNode, "cache_creation_input_tokens");
+        Double cost = doubleOrNull(n, "total_cost_usd");
+        Long duration = longOrNull(n, "duration_ms");
+        int tin = in == null ? 0 : in;
+        int tout = out == null ? 0 : out;
+        int ttotal = total == null ? tin + tout : total;
+        if (tin <= 0 && tout <= 0 && ttotal <= 0) {
+            return null;
+        }
+        return new TokenUsage(
+                tin > 0 ? tin : null,
+                tout > 0 ? tout : null,
+                ttotal > 0 ? ttotal : null,
+                null,
+                null,
+                null,
+                false,
+                false,
+                false,
+                cost,
+                treeIn,
+                treeOut,
+                cacheRead,
+                cacheCreate,
+                duration
+        );
+    }
+
+    private static int[] sumModelUsage(JsonNode modelUsage) {
+        int sumIn = 0;
+        int sumOut = 0;
+        if (modelUsage == null || !modelUsage.isObject()) {
+            return new int[] {0, 0};
+        }
+        var it = modelUsage.fields();
+        while (it.hasNext()) {
+            var e = it.next();
+            JsonNode u = e.getValue();
+            Integer i = intOrNull(u, "inputTokens", "input_tokens", "prompt_tokens");
+            Integer o = intOrNull(u, "outputTokens", "output_tokens", "completion_tokens");
+            if (i != null) {
+                sumIn += i;
+            }
+            if (o != null) {
+                sumOut += o;
+            }
+        }
+        return new int[] {sumIn, sumOut};
+    }
+
+    private static Integer firstCacheInt(JsonNode usage, String field) {
+        Integer direct = intOrNull(usage, field);
+        if (direct != null) {
+            return direct;
+        }
+        JsonNode details = usage.path("input_tokens_details");
+        if (details.isObject()) {
+            return intOrNull(details, field);
+        }
+        return null;
     }
 
     private ParseResult compactFromBoundary(JsonNode n, String sessionId) {
@@ -332,15 +447,12 @@ public final class ClaudeCodeStreamParser {
         int tin = in == null ? 0 : in;
         int tout = out == null ? 0 : out;
         int ttotal = total == null ? tin + tout : total;
-        Integer occupied = null;
-        if (liveOccupancy) {
-            if (tin > 0) {
-                occupied = tin + tout;
-            }
-        } else if (tin > 0) {
-            occupied = tin;
+        if (in == null && out == null && total == null) {
+            return null;
         }
-        return new TokenUsage(tin, tout, ttotal, null, occupied, null, false, liveOccupancy);
+        // live / 中间帧只透传计费字段，contextUsed 由 context_usage 事件单独提供
+        return new TokenUsage(tin, tout, ttotal, null, null, null, false, liveOccupancy, false,
+                null, null, null, null, null, null);
     }
 
     private static String parentToolUseId(JsonNode n) {
@@ -475,6 +587,28 @@ public final class ClaudeCodeStreamParser {
             }
         }
         return "";
+    }
+
+    private static Double doubleOrNull(JsonNode n, String field) {
+        if (n == null || !n.isObject()) {
+            return null;
+        }
+        JsonNode v = n.get(field);
+        if (v != null && v.isNumber()) {
+            return v.doubleValue();
+        }
+        return null;
+    }
+
+    private static Long longOrNull(JsonNode n, String field) {
+        if (n == null || !n.isObject()) {
+            return null;
+        }
+        JsonNode v = n.get(field);
+        if (v != null && v.isNumber()) {
+            return v.longValue();
+        }
+        return null;
     }
 
     private static Integer intOrNull(JsonNode n, String... fields) {

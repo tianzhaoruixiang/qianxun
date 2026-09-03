@@ -38,6 +38,7 @@ public class OpenAiCompatibleStreamClient {
     /**
      * OpenAI 为单次请求用量；Dashboard {@code session.usage} / {@code message.complete.usage}
      * 为会话快照（{@code sessionSnapshot=true}），含 {@code context_used}/{@code context_percent}。
+     * Claude Code {@code context_usage} 仅快照上下文窗口（{@code contextSnapshot=true}），计费仍按各轮 {@code result.usage} 累加。
      */
     public record TokenUsage(
             Integer promptTokens,
@@ -47,10 +48,34 @@ public class OpenAiCompatibleStreamClient {
             Integer contextUsed,
             Double contextPercent,
             boolean sessionSnapshot,
-            boolean liveOccupancy
+            boolean liveOccupancy,
+            boolean contextSnapshot,
+            Double totalCostUsd,
+            Integer treePromptTokens,
+            Integer treeCompletionTokens,
+            Integer cacheReadTokens,
+            Integer cacheCreationTokens,
+            Long durationMs
     ) {
         public TokenUsage(Integer promptTokens, Integer completionTokens, Integer totalTokens, Integer contextWindow) {
-            this(promptTokens, completionTokens, totalTokens, contextWindow, null, null, false, false);
+            this(promptTokens, completionTokens, totalTokens, contextWindow,
+                    null, null, false, false, false,
+                    null, null, null, null, null, null);
+        }
+
+        public TokenUsage(
+                Integer promptTokens,
+                Integer completionTokens,
+                Integer totalTokens,
+                Integer contextWindow,
+                Integer contextUsed,
+                Double contextPercent,
+                boolean sessionSnapshot,
+                boolean liveOccupancy
+        ) {
+            this(promptTokens, completionTokens, totalTokens, contextWindow,
+                    contextUsed, contextPercent, sessionSnapshot, liveOccupancy, false,
+                    null, null, null, null, null, null);
         }
     }
 

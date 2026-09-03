@@ -11,6 +11,7 @@ test("officer uses short custom prompt not claude_code preset", () => {
   const prompt = buildSystemPrompt({ officer: true, append: "【智能体灵魂】\n短", pluginHint: "" });
   assert.equal(typeof prompt, "string");
   assert.ok(prompt.startsWith(OFFICER_SYSTEM_PREFIX));
+  assert.ok(OFFICER_SYSTEM_PREFIX.includes("【调度·必读】"));
   assert.ok(prompt.includes("【智能体灵魂】"));
   assert.equal("excludeDynamicSections" in (typeof prompt === "object" ? prompt : {}), false);
 });
@@ -23,8 +24,8 @@ test("non-officer keeps claude_code preset without excludeDynamicSections", () =
   assert.equal(prompt.excludeDynamicSections, undefined);
 });
 
-test("setting sources isolation skips disk CLAUDE.md", () => {
-  assert.deepEqual(SDK_SETTING_SOURCES, []);
+test("setting sources scan user profile skills and project cwd skills", () => {
+  assert.deepEqual(SDK_SETTING_SOURCES, ["user", "project"]);
 });
 
 test("skill tool only when toolset on and names exist", () => {

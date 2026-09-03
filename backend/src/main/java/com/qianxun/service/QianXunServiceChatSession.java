@@ -281,7 +281,7 @@ public class QianXunServiceChatSession {
         if (sessionRepository.countByParentSessionId(session.id()) > 0) {
             return;
         }
-        String cwd = ClaudeCodePaths.sessionCwd(properties, userId, session.id());
+        String cwd = ClaudeCodePaths.sessionCwd(properties, userId, session.hermesProfile(), session.id());
         HermesAgentClient.ManagedDeleteResult r = hermesAgentClient.deleteManagedPath(userId, cwd);
         if (!r.ok()) {
             log.warn("拆除会话工作区失败 session={} path={} msg={}", session.id(), cwd, r.message());

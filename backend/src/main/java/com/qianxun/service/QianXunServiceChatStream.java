@@ -304,10 +304,12 @@ public class QianXunServiceChatStream {
                     handleToken(ctx, "\n\n（live transcript 读取失败：" + ex.getMessage() + "）\n");
                 }
             }
-            if (!agentsStatusFlag) {
+            // 先结束本轮（done），再抽「下一步建议」。建议 LLM 若卡住，不能拖死专业智能体
+            // 子 ChatRun：干警 wait=true 等的是 done；子会话也不需要给用户展示建议芯片。
+            saveAndComplete(ctx);
+            if (!agentsStatusFlag && !AgentTask.isTaskSession(sessionId)) {
                 generateAndSendSuggestions(ctx, history, storedUserContent, modelCode);
             }
-            saveAndComplete(ctx);
 
         } catch (CancellationException ex) {
             handleStreamCancelled(ctx, totalStart);
@@ -858,7 +860,7 @@ public class QianXunServiceChatStream {
         if (userId == null || userId.isBlank()) {
             return;
         }
-        String ws = ClaudeCodePaths.sessionCwd(properties, userId, ctx.workspaceSessionId());
+        String ws = ClaudeCodePaths.sessionCwd(properties, userId, ctx.hermesProfile(), ctx.workspaceSessionId());
         HermesAgentClient.ManagedDirList listed = hermesAgentClient.listManagedDirectory(
                 userId, ctx.hermesProfile(), ws, true);
         if (!listed.ok() || listed.entries() == null) {
@@ -1458,7 +1460,29 @@ public class QianXunServiceChatStream {
             return;
         }
         ctx.suggestions = items;
-        publish(ctx, "suggestions", Map.of("items", items));
+        if (ctx.run().isRunning()) {
+            publish(ctx, "suggestions", Map.of("items", items));
+        }
+        persistSuggestionsIfPossible(ctx);
+    }
+
+    /** 本轮已落库后补写建议，供刷新会话时展示。 */
+    private void persistSuggestionsIfPossible(StreamContext ctx) {
+        if (ctx.assistantMessageId == null || ctx.assistantMessageId.isBlank()) {
+            return;
+        }
+        try {
+            sessionService.updateAssistantMessage(
+                    ctx.assistantMessageId,
+                    ctx.responseText.toString(),
+                    snapshotToolCallsJson(ctx),
+                    snapshotUsageJson(ctx),
+                    snapshotSuggestionsJson(ctx),
+                    ChatMessage.STATUS_COMPLETED
+            );
+        } catch (Exception ex) {
+            log.debug("补写下一步建议失败: {}", ex.toString());
+        }
     }
 
     /**
@@ -1879,6 +1903,12 @@ public class QianXunServiceChatStream {
     }
 
     private void stampGenerationMs(StreamContext ctx) {
+        if (ctx.usage != null) {
+            Object existing = ctx.usage.get("generationMs");
+            if (existing instanceof Number n && n.longValue() > 0) {
+                return;
+            }
+        }
         long ms = Math.max(0, System.currentTimeMillis() - ctx.startedAt());
         Map<String, Object> usage = ctx.usage == null ? new LinkedHashMap<>() : new LinkedHashMap<>(ctx.usage);
         usage.put("generationMs", ms);

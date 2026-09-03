@@ -1,10 +1,10 @@
 /**
- * Mem0 语义记忆配置（Phase 1：只读召回）。
- * 环境变量优先；请求体可临时开关 memoryEnabled。
+ * Mem0 语义记忆配置（Phase 1 召回 + Phase 2 异步写入）。
+ * 环境变量优先；请求体可临时开关 memoryEnabled / memoryWriteEnabled。
  *
  * mode:
  * - platform → 云端 api.mem0.ai（/v1/memories/search/ + Token）
- * - oss      → 本地自托管（POST /search，可无鉴权）
+ * - oss      → 本地自托管（POST /search、/memories，可无鉴权）
  */
 
 export const PREFS_AGENT_ID = "user_prefs";
@@ -50,6 +50,9 @@ export function loadMemoryConfig(body = {}, env = process.env) {
   const timeoutMs = clampInt(env.QIANXUN_MEM0_TIMEOUT_MS, 250, 50, 5_000);
   const topK = clampInt(env.QIANXUN_MEM0_TOP_K, 5, 1, 20);
   const maxChars = clampInt(env.QIANXUN_MEM0_MAX_CHARS, 4_000, 500, 12_000);
+  const writeTimeoutMs = clampInt(env.QIANXUN_MEM0_WRITE_TIMEOUT_MS, 30_000, 1_000, 120_000);
+  const writeMaxChars = clampInt(env.QIANXUN_MEM0_WRITE_MAX_CHARS, 4_000, 500, 16_000);
+  const writeMaxAttempts = clampInt(env.QIANXUN_MEM0_WRITE_MAX_ATTEMPTS, 3, 1, 8);
 
   const hasCredential = mode === "oss" ? Boolean(apiKey) : Boolean(apiKey) && apiKey !== "oss-local";
   let enabled = hasCredential && truthyEnv(env.QIANXUN_MEM0_ENABLED);
@@ -65,8 +68,22 @@ export function loadMemoryConfig(body = {}, env = process.env) {
     enabled = mode === "oss" ? true : Boolean(apiKey) && apiKey !== "oss-local";
   }
 
+  // 写入默认跟随 enabled；可用 QIANXUN_MEM0_WRITE_ENABLED / body.memoryWriteEnabled 覆盖
+  let writeEnabled = enabled;
+  if (falsyEnv(env.QIANXUN_MEM0_WRITE_ENABLED)) {
+    writeEnabled = false;
+  } else if (truthyEnv(env.QIANXUN_MEM0_WRITE_ENABLED)) {
+    writeEnabled = enabled;
+  }
+  if (body && body.memoryWriteEnabled === false) {
+    writeEnabled = false;
+  } else if (body && body.memoryWriteEnabled === true) {
+    writeEnabled = enabled;
+  }
+
   return {
     enabled,
+    writeEnabled,
     mode,
     apiKey,
     baseUrl,
@@ -74,6 +91,9 @@ export function loadMemoryConfig(body = {}, env = process.env) {
     timeoutMs,
     topK,
     maxChars,
+    writeTimeoutMs,
+    writeMaxChars,
+    writeMaxAttempts,
     prefsAgentId: PREFS_AGENT_ID,
     /** OSS 不保证 app_id 过滤 */
     includeAppId: mode === "platform",

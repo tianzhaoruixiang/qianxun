@@ -13,3 +13,6 @@ docker/images**
 docker/image-out/
 litellm/__pycache__/
 
+
+# 本地文档生成虚拟环境
+.venv-docgen/

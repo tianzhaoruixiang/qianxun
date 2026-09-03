@@ -239,7 +239,7 @@ public class HermesAgentClient {
         }
         String text = content == null ? "" : content;
         if (text.length() > 4_000) {
-            return new SoulResult(false, "", false, "SOUL.md 过长（最多 4000 字）");
+            return new SoulResult(false, "", false, "CLAUDE.md 过长（最多 4000 字）");
         }
         try {
             LinkedHashMap<String, Object> body = new LinkedHashMap<>();
@@ -698,7 +698,7 @@ public class HermesAgentClient {
 
     public DownloadedFile downloadGeneratedDocument(String userId, String profile, String path, String workspaceSessionId) {
         DownloadedFile last = new DownloadedFile(false, new byte[0], filenameOf(path), "路径为空");
-        for (String candidate : HermesGeneratedDocuments.downloadCandidates(path, userId, workspaceSessionId)) {
+        for (String candidate : HermesGeneratedDocuments.downloadCandidates(path, userId, workspaceSessionId, profile)) {
             last = downloadManagedFile(userId, profile, candidate, false, workspaceSessionId);
             if (last.ok()) {
                 return last;

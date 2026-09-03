@@ -65,8 +65,8 @@ export const CATALOG = [
   },
 ];
 
-/** 缺省只开文件与技能；终端/网页/委派等需在工具市场显式打开。 */
-export const DEFAULT_ENABLED = ["file", "skills"];
+/** 缺省打开目录内全部 Claude Code 工具集，避免技能（如报销单）缺 Bash/Write 等跑不起来。 */
+export const DEFAULT_ENABLED = CATALOG.map((d) => d.name);
 
 export function isCatalogName(name) {
   const key = String(name || "").trim().toLowerCase();

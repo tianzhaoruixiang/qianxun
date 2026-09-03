@@ -2,6 +2,7 @@ package com.qianxun.storage;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.qianxun.llm.ClaudeCodePaths;
 import com.qianxun.llm.HermesWorkspaceSandbox;
 
 import java.util.ArrayList;
@@ -21,7 +22,7 @@ public final class HermesGeneratedDocuments {
     public static final Set<String> EXTS = Set.of("xlsx", "xls", "md", "doc", "docx");
 
     private static final Set<String> SKIP_NAMES = Set.of(
-            "soul.md", "user.md", "agents.md", "heartbeat.md", "memory.md", "boot.md"
+            "soul.md", "claude.md", "user.md", "agents.md", "heartbeat.md", "memory.md", "boot.md"
     );
     private static final Set<String> PATH_KEYS = Set.of(
             "path", "file", "file_path", "filepath", "filename", "target", "dest",
@@ -101,13 +102,19 @@ public final class HermesGeneratedDocuments {
     }
 
     /**
-     * @param userId 千寻用户 ID。Claude Code 的 cwd 是 {@code /opt/data/{userId}/workspace/qx/{sessionId}}。
+     * @param userId 千寻用户 ID。Claude Code 的 cwd 是 {@code /opt/data/{userId}/profiles/{profile}/workspace/{sessionId}}。
      */
     public static List<String> downloadCandidates(String path, String userId) {
         return downloadCandidates(path, userId, null);
     }
 
     public static List<String> downloadCandidates(String path, String userId, String workspaceSessionId) {
+        return downloadCandidates(path, userId, workspaceSessionId, null);
+    }
+
+    public static List<String> downloadCandidates(
+            String path, String userId, String workspaceSessionId, String profile
+    ) {
         LinkedHashSet<String> out = new LinkedHashSet<>();
         if (path == null || path.isBlank()) {
             return List.of();
@@ -122,6 +129,7 @@ public final class HermesGeneratedDocuments {
         out.add(p);
         String base = filenameOf(p);
         String uid = userId == null ? "" : userId.trim();
+        String prof = profile == null ? "" : profile.trim();
         if (!base.isBlank()) {
             out.add(base);
             if (!uid.isBlank()) {
@@ -129,6 +137,10 @@ public final class HermesGeneratedDocuments {
                 out.add("workspace/" + base);
                 String sid = HermesWorkspaceSandbox.sanitizeSessionId(workspaceSessionId);
                 if (!sid.isBlank()) {
+                    if (!prof.isBlank()) {
+                        String norm = ClaudeCodePaths.normalizeProfileName(prof);
+                        out.add("/opt/data/" + uid + "/profiles/" + norm + "/workspace/" + sid + "/" + base);
+                    }
                     out.add("/opt/data/" + uid + "/workspace/qx/" + sid + "/" + base);
                     out.add("workspace/qx/" + sid + "/" + base);
                 }
@@ -137,8 +149,8 @@ public final class HermesGeneratedDocuments {
             out.add("/opt/data/" + base);
             out.add("/opt/data/files/public/" + base);
             out.add("/opt/data/workspace/" + base);
-            // 会话沙箱：相对文件名常落在 cwd=.../workspace/qx/<sid>/
-            if (p.contains("/workspace/qx/")) {
+            // 会话沙箱：相对文件名常落在 cwd=.../profiles/{profile}/workspace/<sid>/ 或旧 workspace/qx/<sid>/
+            if (p.contains("/workspace/qx/") || p.contains("/profiles/") && p.contains("/workspace/")) {
                 out.add(p);
             }
         }

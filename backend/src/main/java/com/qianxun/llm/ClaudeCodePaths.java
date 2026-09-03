@@ -7,7 +7,7 @@ import java.nio.file.Path;
 /**
  * Claude Code 运行器在数据盘上的目录约定：每用户 {@code /opt/data/{userId}/profiles/{name}}
  * 放 {@code CLAUDE.md} 与 {@code .claude/skills}，会话 cwd 为
- * {@code /opt/data/{userId}/workspace/qx/{sessionId}}。
+ * {@code /opt/data/{userId}/profiles/{profile}/workspace/{sessionId}}。
  */
 public final class ClaudeCodePaths {
 
@@ -29,16 +29,12 @@ public final class ClaudeCodePaths {
         return HermesWorkspaceSandbox.workspace(dataDir(properties), userId);
     }
 
-    public static String sessionCwd(QianxunProperties properties, String userId, String workspaceSessionId) {
-        return HermesWorkspaceSandbox.sessionCwd(dataDir(properties), userId, workspaceSessionId);
+    public static String sessionCwd(QianxunProperties properties, String userId, String profile, String workspaceSessionId) {
+        return HermesWorkspaceSandbox.sessionCwd(dataDir(properties), userId, profile, workspaceSessionId);
     }
 
     public static Path claudeMd(String profileHome) {
         return Path.of(profileHome, "CLAUDE.md");
-    }
-
-    public static Path soulMd(String profileHome) {
-        return Path.of(profileHome, "SOUL.md");
     }
 
     public static Path skillsDir(String profileHome) {

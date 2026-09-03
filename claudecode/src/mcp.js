@@ -272,13 +272,13 @@ export async function signalDelegationCancel(userId, profile, delegationId) {
   }
 }
 
-export async function deleteManagedPath(userId, absPath, workspaceSessionId) {
+export async function deleteManagedPath(userId, absPath, workspaceSessionId, profile) {
   const uid = sanitizeOwnerId(userId);
   if (!uid) {
     return { ok: false, message: "用户标识无效" };
   }
   const { resolveManaged } = await import("./paths.js");
-  const p = resolveManaged(absPath, uid, workspaceSessionId);
+  const p = resolveManaged(absPath, uid, workspaceSessionId, profile);
   try {
     await fs.rm(p, { recursive: true, force: true });
     return { ok: true, path: p, message: "已删除" };

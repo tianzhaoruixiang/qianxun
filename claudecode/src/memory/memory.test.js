@@ -234,3 +234,194 @@ test("memoryRecall degrades on client failure", async () => {
   assert.equal(result.append, "");
   assert.equal(result.degraded, true);
 });
+
+test("redactSecrets masks keys emails and phones", async () => {
+  const { redactSecrets } = await import("./redact.js");
+  const out = redactSecrets("key=sk-abcdefghijklmnopqrstuvwxyz phone=13812345678 mail=a@b.com");
+  assert.match(out, /\[REDACTED\]/);
+  assert.doesNotMatch(out, /sk-abcdefghijklmnopqrstuvwxyz/);
+  assert.doesNotMatch(out, /13812345678/);
+  assert.doesNotMatch(out, /a@b\.com/);
+});
+
+test("accumulateAssistantText prefers stream over result", async () => {
+  const { accumulateAssistantText } = await import("./extract.js");
+  const state = { text: "", fromStream: false };
+  accumulateAssistantText(state, {
+    type: "stream_event",
+    event: { delta: { type: "text_delta", text: "你好" } },
+  });
+  accumulateAssistantText(state, {
+    type: "assistant",
+    message: { content: [{ type: "text", text: "世界" }] },
+  });
+  accumulateAssistantText(state, {
+    type: "result",
+    result: "整轮摘要不应覆盖",
+  });
+  assert.equal(state.text, "你好世界");
+});
+
+test("createMemoryClient oss posts to /memories on add", async () => {
+  const { createMemoryClient } = await import("./client.js");
+  let seen;
+  const client = createMemoryClient({
+    enabled: true,
+    mode: "oss",
+    apiKey: "oss-local",
+    baseUrl: "http://mem0:8000",
+    writeTimeoutMs: 5_000,
+  }, {
+    fetchImpl: async (url, init) => {
+      seen = { url, body: JSON.parse(init.body), method: init.method };
+      return {
+        ok: true,
+        headers: { get: () => "application/json" },
+        async json() {
+          return { results: [] };
+        },
+      };
+    },
+  });
+  await client.add(
+    [{ role: "user", content: "我喜欢深色主题" }, { role: "assistant", content: "已记下" }],
+    { user_id: "u1", agent_id: PREFS_AGENT_ID, metadata: { lane: "prefs" } },
+  );
+  assert.equal(seen.url, "http://mem0:8000/memories");
+  assert.equal(seen.method, "POST");
+  assert.equal(seen.body.user_id, "u1");
+  assert.equal(seen.body.agent_id, PREFS_AGENT_ID);
+  assert.equal(seen.body.messages.length, 2);
+});
+
+test("memoryPersist enqueues prefs lane and calls add", async () => {
+  const { memoryPersist } = await import("./persist.js");
+  const { createMemoryQueue } = await import("./queue.js");
+  const adds = [];
+  const queue = createMemoryQueue({ retryDelayMs: 0 });
+  const client = {
+    enabled: true,
+    async add(messages, params) {
+      adds.push({ messages, params });
+    },
+  };
+  const result = await memoryPersist({
+    userId: "u1",
+    prompt: "我喜欢用 TypeScript 严格模式",
+    assistantText: "好的，已记住你的偏好。",
+    body: {},
+    officer: true,
+    ok: true,
+    sessionId: "sess-1",
+    config: {
+      enabled: true,
+      writeEnabled: true,
+      apiKey: "k",
+      baseUrl: "http://example",
+      appId: "qianxun",
+      prefsAgentId: PREFS_AGENT_ID,
+      includeAppId: true,
+      writeMaxChars: 4_000,
+      writeMaxAttempts: 2,
+    },
+    client,
+    queue,
+  });
+  assert.equal(result.enqueued, true);
+  assert.equal(result.jobs, 1);
+  // 等待队列消费
+  for (let i = 0; i < 40 && queue._size() > 0; i += 1) {
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  assert.equal(adds.length, 1);
+  assert.equal(adds[0].params.agent_id, PREFS_AGENT_ID);
+  assert.equal(adds[0].params.user_id, "u1");
+  assert.equal(adds[0].messages[0].role, "user");
+});
+
+test("memoryPersist dual-lane for pro agent", async () => {
+  const { memoryPersist } = await import("./persist.js");
+  const { createMemoryQueue } = await import("./queue.js");
+  const adds = [];
+  const queue = createMemoryQueue({ retryDelayMs: 0 });
+  const client = {
+    enabled: true,
+    async add(_messages, params) {
+      adds.push(params.agent_id);
+    },
+  };
+  const result = await memoryPersist({
+    userId: "u1",
+    prompt: "账单导出用 CSV",
+    assistantText: "好的，以后账单默认 CSV。",
+    body: { agentInstanceId: "billing" },
+    officer: false,
+    ok: true,
+    sessionId: "sess-2",
+    config: {
+      enabled: true,
+      writeEnabled: true,
+      apiKey: "k",
+      baseUrl: "http://example",
+      appId: "qianxun",
+      prefsAgentId: PREFS_AGENT_ID,
+      includeAppId: false,
+      writeMaxChars: 4_000,
+      writeMaxAttempts: 1,
+    },
+    client,
+    queue,
+  });
+  assert.equal(result.jobs, 2);
+  for (let i = 0; i < 40 && queue._size() > 0; i += 1) {
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  assert.deepEqual(adds.sort(), ["billing", PREFS_AGENT_ID].sort());
+});
+
+test("memoryPersist skips when write disabled or empty assistant", async () => {
+  const { memoryPersist } = await import("./persist.js");
+  const queue = { enqueue() { throw new Error("should not enqueue"); } };
+  const disabled = await memoryPersist({
+    userId: "u1",
+    prompt: "hi",
+    assistantText: "hello",
+    ok: true,
+    config: { enabled: true, writeEnabled: false },
+    queue,
+  });
+  assert.equal(disabled.reason, "disabled");
+
+  const empty = await memoryPersist({
+    userId: "u1",
+    prompt: "hi",
+    assistantText: "",
+    ok: true,
+    config: { enabled: true, writeEnabled: true, prefsAgentId: PREFS_AGENT_ID },
+    queue,
+  });
+  assert.equal(empty.reason, "empty_assistant");
+});
+
+test("loadMemoryConfig writeEnabled follows flag", () => {
+  const on = loadMemoryConfig({}, {
+    QIANXUN_MEM0_ENABLED: "1",
+    QIANXUN_MEM0_MODE: "oss",
+  });
+  assert.equal(on.writeEnabled, true);
+  assert.equal(on.writeTimeoutMs, 30_000);
+
+  const writeOff = loadMemoryConfig({}, {
+    QIANXUN_MEM0_ENABLED: "1",
+    QIANXUN_MEM0_MODE: "oss",
+    QIANXUN_MEM0_WRITE_ENABLED: "false",
+  });
+  assert.equal(writeOff.enabled, true);
+  assert.equal(writeOff.writeEnabled, false);
+
+  const bodyOff = loadMemoryConfig(
+    { memoryWriteEnabled: false },
+    { QIANXUN_MEM0_ENABLED: "1", QIANXUN_MEM0_MODE: "oss" },
+  );
+  assert.equal(bodyOff.writeEnabled, false);
+});

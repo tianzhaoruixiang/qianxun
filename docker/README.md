@@ -121,7 +121,7 @@ docker compose up -d claude-code
 - LiteLLM 上游必须能提供 **chat + embeddings**；默认 embedding 走 `text-embedding-v3`（百炼），向量维数 `MEM0_EMBEDDING_DIMS=1024`。换 embedding 模型后需清空 `data/mem0/postgres` 或 `DROP TABLE memories`。
 - sidecar 使用 `QIANXUN_MEM0_MODE=oss` + `QIANXUN_MEM0_BASE_URL=http://mem0:8000`。
 - 本地入口无鉴权，**不要**把 `8888` 暴露到公网。
-- 当前 Phase 1 仅召回；写入（`POST /memories`）在 Phase 2。
+- Phase 2：对话成功后异步 `POST /memories`（双车道 prefs + agent）；可用 `QIANXUN_MEM0_WRITE_ENABLED=false` 只召回不写入。
 - 构建若异常可用：`docker build -t qianxun/mem0:dev ./mem0`。
 
 ## 一键启动

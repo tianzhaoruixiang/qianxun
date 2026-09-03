@@ -30,8 +30,8 @@ public class HermesToolsetService {
     static final String NO_MCP = "no_mcp";
 
     /**
-     * 对话缺省白名单：默认只开 file / skills。
-     * 用户在工具市场打开的其它项写入 enabled；关闭的项写入 disabled。
+     * 对话缺省白名单：默认打开全部 Claude Code 工具集。
+     * 用户关闭的项写入 disabled。
      */
     static final List<String> DEFAULT_CHAT_ENABLED = ClaudeCodeToolsets.DEFAULT_ENABLED;
 
@@ -217,7 +217,7 @@ public class HermesToolsetService {
                 enabled.add(canonicalPresent(present, extra));
             }
         }
-        // 对话白名单保留用户已打开的项，并保证缺省 file / skills 始终可用。
+        // 对话白名单保留用户已打开的项，并保证缺省工具集始终可用。
         for (String extra : DEFAULT_CHAT_ENABLED) {
             if (isAlwaysDisabled(extra)) {
                 continue;

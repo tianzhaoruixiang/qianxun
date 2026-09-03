@@ -12,12 +12,13 @@ import {
   profileHome,
   profilesRoot,
   resolveManaged,
+  legacySessionCwd,
   sanitizeOwnerId,
+  sanitizeSessionId,
   sanitizeProfileName,
   sanitizeSkillName,
   skillDir,
   skillsDir,
-  soulMd,
   TEMPLATE_PROFILES_ROOT,
   bundledProfileHome,
   templateProfileHome,
@@ -48,6 +49,56 @@ async function readJson(file, fallback) {
 async function writeJson(file, obj) {
   await fs.mkdir(path.dirname(file), { recursive: true });
   await fs.writeFile(file, JSON.stringify(obj, null, 2), "utf8");
+}
+
+function yamlField(md, field) {
+  const t = String(md || "").trim();
+  if (!t.startsWith("---")) {
+    return "";
+  }
+  const end = t.indexOf("\n---", 3);
+  if (end < 0) {
+    return "";
+  }
+  const key = `${field}:`;
+  for (const line of t.slice(3, end).split("\n")) {
+    const s = line.trim();
+    if (s.toLowerCase().startsWith(key.toLowerCase())) {
+      return s.slice(key.length).trim().replace(/^['"]|['"]$/g, "");
+    }
+  }
+  return "";
+}
+
+/** SDK options.skills 要和 SKILL.md 的 name 或目录名精确匹配。 */
+export function skillOptionNames(dirName, md) {
+  const dir = String(dirName || "").trim();
+  const yamlName = yamlField(md, "name");
+  const out = [];
+  const seen = new Set();
+  for (const n of [dir, yamlName]) {
+    const s = String(n || "").trim();
+    if (!s || seen.has(s) || !isExactSkillOptionName(s)) {
+      continue;
+    }
+    seen.add(s);
+    out.push(s);
+  }
+  return out;
+}
+
+function isExactSkillOptionName(name) {
+  const s = String(name || "");
+  if (!s || s !== s.trim()) {
+    return false;
+  }
+  if (s === "*" || s.includes(":*")) {
+    return false;
+  }
+  if (/[()<>]/.test(s) || /[\u0000-\u001f]/.test(s)) {
+    return false;
+  }
+  return true;
 }
 
 function descriptionFromSkillMd(md) {
@@ -99,6 +150,7 @@ async function collectSkills(dir, disabled, provenance, byName) {
       const enabled = ![...disabled].some((n) => n.toLowerCase() === e.name.toLowerCase());
       byName.set(e.name, {
         name: e.name,
+        invokeNames: skillOptionNames(e.name, content),
         description: descriptionFromSkillMd(content),
         category: "",
         enabled,
@@ -110,7 +162,17 @@ async function collectSkills(dir, disabled, provenance, byName) {
   }
 }
 
-const TEMPLATE_SKIP_DIRS = new Set([".claude-home", "cache"]);
+const TEMPLATE_SKIP_DIRS = new Set([".claude-home", "cache", "workspace"]);
+/** 遗留人设文件，不再复制或写入；人设只保留 CLAUDE.md。 */
+const TEMPLATE_SKIP_FILES = new Set(["SOUL.md"]);
+
+async function removeLegacySoulMd(home) {
+  try {
+    await fs.unlink(`${home}/SOUL.md`);
+  } catch {
+    /* 本就不存在 */
+  }
+}
 
 async function copyProfileAssets(src, dest, { skipExisting = false, insideClaude = false } = {}) {
   let entries;
@@ -121,7 +183,7 @@ async function copyProfileAssets(src, dest, { skipExisting = false, insideClaude
   }
   await fs.mkdir(dest, { recursive: true });
   for (const e of entries) {
-    if (TEMPLATE_SKIP_DIRS.has(e.name)) {
+    if (TEMPLATE_SKIP_DIRS.has(e.name) || TEMPLATE_SKIP_FILES.has(e.name)) {
       continue;
     }
     // Dirent 对「指向目录的软链」isDirectory() 为 false，copyFile 会 EISDIR。
@@ -160,7 +222,7 @@ async function copyProfileAssets(src, dest, { skipExisting = false, insideClaude
   return true;
 }
 
-/** 规范化已落盘的 enabled/disabled；不再把未点开的目录项自动补进白名单。 */
+/** 规范化已落盘的 enabled/disabled；尊重 disabled，不把未关闭项自动补回白名单。 */
 async function migrateToolsetsEnableMissing(home) {
   const file = toolsetsFile(home);
   const doc = await readJson(file, null);
@@ -366,14 +428,7 @@ async function readSoulFile(file) {
 }
 
 async function readBundledOfficerSoul() {
-  const home = bundledProfileHome("default");
-  for (const file of [claudeMd(home), soulMd(home)]) {
-    const text = await readSoulFile(file);
-    if (text) {
-      return text;
-    }
-  }
-  return "";
+  return readSoulFile(claudeMd(bundledProfileHome("default")));
 }
 
 /** 把镜像内置的数智干警模板补到平台 `_templates/profiles/default`（不覆盖管理员已改过的灵魂）。 */
@@ -381,32 +436,26 @@ async function ensurePlatformDefaultTemplate() {
   const bundled = bundledProfileHome("default");
   const dest = templateProfileHome("default");
   await copyProfileAssets(bundled, dest, { skipExisting: true });
+  await removeLegacySoulMd(dest);
   const bundledSoul = await readBundledOfficerSoul();
   if (!bundledSoul) {
     return;
   }
-  const current = (await readSoulFile(claudeMd(dest))) || (await readSoulFile(soulMd(dest)));
+  const current = await readSoulFile(claudeMd(dest));
   if (isReplaceableOfficerSoul(current)) {
     await fs.mkdir(dest, { recursive: true });
     await fs.writeFile(claudeMd(dest), bundledSoul, "utf8");
-    await fs.writeFile(soulMd(dest), bundledSoul, "utf8");
   }
 }
 
 async function seedSoulFromTemplate(userHome, name, fallback, userId) {
-  const existing = (await readSoulFile(claudeMd(userHome))) || (await readSoulFile(soulMd(userHome)));
+  const existing = await readSoulFile(claudeMd(userHome));
   const shouldWrite = isReplaceableOfficerSoul(existing);
   if (!shouldWrite) {
+    await removeLegacySoulMd(userHome);
     return;
   }
-  let text = "";
-  const tpl = templateProfileHome(name);
-  for (const file of [claudeMd(tpl), soulMd(tpl)]) {
-    text = await readSoulFile(file);
-    if (text) {
-      break;
-    }
-  }
+  let text = await readSoulFile(claudeMd(templateProfileHome(name)));
   if (!text && name === "default") {
     text = await readBundledOfficerSoul();
   }
@@ -414,6 +463,7 @@ async function seedSoulFromTemplate(userHome, name, fallback, userId) {
     text = fallback || "";
   }
   if (!text) {
+    await removeLegacySoulMd(userHome);
     return;
   }
   if (name === "default") {
@@ -421,7 +471,7 @@ async function seedSoulFromTemplate(userHome, name, fallback, userId) {
   }
   await fs.mkdir(userHome, { recursive: true });
   await fs.writeFile(claudeMd(userHome), text, "utf8");
-  await fs.writeFile(soulMd(userHome), text, "utf8");
+  await removeLegacySoulMd(userHome);
 }
 
 async function seedProfileFromTemplate(userHome, profileName, fallbackSoul, userId) {
@@ -554,12 +604,7 @@ export async function getSoul(userId, rawName) {
     const content = await fs.readFile(claudeMd(home), "utf8");
     return { ok: true, content, exists: true, message: "" };
   } catch {
-    try {
-      const content = await fs.readFile(soulMd(home), "utf8");
-      return { ok: true, content, exists: true, message: "" };
-    } catch {
-      return { ok: true, content: "", exists: false, message: "" };
-    }
+    return { ok: true, content: "", exists: false, message: "" };
   }
 }
 
@@ -568,12 +613,12 @@ export async function putSoul(userId, rawName, content) {
   const name = normalizeProfileName(rawName);
   const text = content == null ? "" : String(content);
   if (text.length > SOUL_APPEND_MAX) {
-    return { ok: false, content: "", exists: false, message: `SOUL.md 过长（最多 ${SOUL_APPEND_MAX} 字）` };
+    return { ok: false, content: "", exists: false, message: `CLAUDE.md 过长（最多 ${SOUL_APPEND_MAX} 字）` };
   }
   const home = profileHome(name, userId);
   await fs.mkdir(home, { recursive: true });
   await fs.writeFile(claudeMd(home), text, "utf8");
-  await fs.writeFile(soulMd(home), text, "utf8");
+  await removeLegacySoulMd(home);
   // 数智干警 default 是每用户一份人设，写入不覆盖平台模板；专业智能体仍发布模板供其他用户首次复制。
   if (name !== "default") {
     await publishProfileTemplateFrom(userId, name);
@@ -725,8 +770,8 @@ export async function readToolsets(userId, profile) {
 
 export async function listToolsets(userId, profile) {
   const gw = await readToolsets(userId, profile);
-  const on = gw.enabled && gw.enabled.length ? gw.enabled : DEFAULT_ENABLED;
-  return toInfos(on);
+  // readToolsets 已在缺省配置时回落 DEFAULT_ENABLED；空数组表示用户显式全部关闭。
+  return toInfos(Array.isArray(gw.enabled) ? gw.enabled : []);
 }
 
 export async function syncToolsets(userId, profile, enabled, disabled) {
@@ -777,18 +822,18 @@ export async function toggleToolset(userId, profile, toolsetName, enabled) {
   return { ok: true, name, enabled, message: "" };
 }
 
-export async function ensureDir(userId, absPath, workspaceSessionId) {
+export async function ensureDir(userId, absPath, workspaceSessionId, profile) {
   requireUserId(userId);
-  const p = resolveManaged(absPath, userId, workspaceSessionId);
+  const p = resolveManaged(absPath, userId, workspaceSessionId, profile);
   await fs.mkdir(p, { recursive: true });
   return { ok: true, path: p, message: "" };
 }
 
 const SKIP_WALK_DIRS = new Set(["node_modules", ".git", ".qianxun"]);
 
-export async function listDir(userId, absPath, recursive = false, workspaceSessionId) {
+export async function listDir(userId, absPath, recursive = false, workspaceSessionId, profile) {
   requireUserId(userId);
-  const p = resolveManaged(absPath, userId, workspaceSessionId);
+  const p = resolveManaged(absPath, userId, workspaceSessionId, profile);
   return walkDir(p, Boolean(recursive), 0, 5);
 }
 
@@ -838,9 +883,9 @@ async function walkDir(dir, recursive, depth, maxDepth) {
   return { ok: true, path: dir, entries: out, message: "" };
 }
 
-export async function writeFileBytes(userId, absPath, bytes, workspaceSessionId) {
+export async function writeFileBytes(userId, absPath, bytes, workspaceSessionId, profile) {
   requireUserId(userId);
-  const p = resolveManaged(absPath, userId, workspaceSessionId);
+  const p = resolveManaged(absPath, userId, workspaceSessionId, profile);
   const data = bytes || Buffer.alloc(0);
   if (data.length > 8 * 1024 * 1024) {
     return { ok: false, path: p, message: "单文件超过 8MiB" };
@@ -850,13 +895,24 @@ export async function writeFileBytes(userId, absPath, bytes, workspaceSessionId)
   return { ok: true, path: p, message: "" };
 }
 
-export async function readFileBytes(userId, absPath, workspaceSessionId) {
+export async function readFileBytes(userId, absPath, workspaceSessionId, profile) {
   requireUserId(userId);
-  const p = resolveManaged(absPath, userId, workspaceSessionId);
+  const p = resolveManaged(absPath, userId, workspaceSessionId, profile);
   try {
     const bytes = await fs.readFile(p);
     return { ok: true, bytes, filename: filenameOf(p), message: "" };
   } catch {
+    const raw = String(absPath ?? "").trim();
+    const sid = sanitizeSessionId(workspaceSessionId);
+    if (sid && raw && !path.isAbsolute(raw)) {
+      try {
+        const legacy = path.join(legacySessionCwd(userId, sid), path.basename(raw));
+        const bytes = await fs.readFile(legacy);
+        return { ok: true, bytes, filename: filenameOf(legacy), message: "" };
+      } catch {
+        /* 旧路径也无此文件 */
+      }
+    }
     return { ok: false, bytes: null, filename: filenameOf(absPath), message: "文件不存在" };
   }
 }

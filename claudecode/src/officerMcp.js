@@ -45,7 +45,7 @@ export function buildOfficerMcp(orchestration) {
   return createSdkMcpServer({
     name: "qianxun-officer",
     version: "1.0.0",
-    instructions: "专业任务用 delegate_to_agent，等返回后按 artifact 汇总。",
+    instructions: "专业任务用 delegate_to_agent；agentCode 必须取自系统提示【调度·必读】，等返回后按 artifact 汇总。",
     tools: [
       tool(
         "delegate_to_agent",

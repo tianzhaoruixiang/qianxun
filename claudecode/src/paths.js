@@ -71,7 +71,7 @@ export function profileHome(profile, userId) {
   return `${profilesRoot(userId)}/${name}`;
 }
 
-/** 用户工作区根（不再作为 cwd）：/opt/data/{userId}/workspace */
+/** 用户工作区根（兼容旧会话产物）：/opt/data/{userId}/workspace */
 export function workspace(userId) {
   return `${userRoot(userId)}/workspace`;
 }
@@ -82,10 +82,19 @@ export function sanitizeSessionId(sessionId) {
   return sanitizeOwnerId(sessionId);
 }
 
-/** 会话独立 cwd：/opt/data/{userId}/workspace/qx/{workspaceSessionId} */
-export function sessionCwd(userId, workspaceSessionId) {
+/** 旧会话 cwd：/opt/data/{userId}/workspace/qx/{workspaceSessionId} */
+export function legacySessionCwd(userId, workspaceSessionId) {
   const sid = sanitizeSessionId(workspaceSessionId) || "default";
   return `${workspace(userId)}/${SESSION_DIR}/${sid}`;
+}
+
+/**
+ * 会话独立 cwd：/opt/data/{userId}/profiles/{profile}/workspace/{workspaceSessionId}
+ * 与 HOME（profile 根）同树，技能在 ../.claude/skills；不要把 profile 根当 cwd。
+ */
+export function sessionCwd(userId, workspaceSessionId, profile) {
+  const sid = sanitizeSessionId(workspaceSessionId) || "default";
+  return `${profileHome(profile, userId)}/workspace/${sid}`;
 }
 
 export function templateProfileHome(profile) {
@@ -100,10 +109,6 @@ export function bundledProfileHome(profile) {
 
 export function claudeMd(home) {
   return `${home}/CLAUDE.md`;
-}
-
-export function soulMd(home) {
-  return `${home}/SOUL.md`;
 }
 
 /**
@@ -164,7 +169,7 @@ export function filenameOf(p) {
   return slash >= 0 ? s.slice(slash + 1) : s;
 }
 
-export function resolveManaged(absPath, userId, workspaceSessionId) {
+export function resolveManaged(absPath, userId, workspaceSessionId, profile) {
   const raw = String(absPath ?? "").trim();
   if (!raw) {
     throw new Error("路径不能为空");
@@ -175,7 +180,7 @@ export function resolveManaged(absPath, userId, workspaceSessionId) {
   }
   const root = userRoot(uid);
   const sid = sanitizeSessionId(workspaceSessionId);
-  const workspaceDir = sid ? sessionCwd(uid, sid) : workspace(uid);
+  const workspaceDir = sid ? sessionCwd(uid, sid, profile) : workspace(uid);
   let resolved;
   if (path.isAbsolute(raw)) {
     resolved = path.resolve(raw);

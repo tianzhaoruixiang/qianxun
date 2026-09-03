@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   applyOfficerLeanTools,
+  officerAllowedTools,
   officerHint,
   officerLeanClaudeTools,
+  withOfficerMcpTools,
 } from "./officerPolicy.js";
 import { CATALOG, allowedClaudeTools } from "./toolsets.js";
 import { buildSystemAppend } from "./systemAppend.js";
@@ -21,15 +23,28 @@ test("officer lean tools drop bash web and ask-user", () => {
   assert.deepEqual(applyOfficerLeanTools(full, { skillsOn: false }), officerLeanClaudeTools(false));
 });
 
+test("officer tools list includes MCP delegate tools", () => {
+  const full = allowedClaudeTools(CATALOG.map((d) => d.name));
+  const lean = applyOfficerLeanTools(full, { skillsOn: true });
+  const withMcp = withOfficerMcpTools(lean);
+  for (const t of officerAllowedTools()) {
+    assert.ok(withMcp.includes(t), t);
+  }
+  assert.ok(!lean.includes("mcp__qianxun-officer__delegate_to_agent"));
+});
+
 test("officer hint lists name and code without description", () => {
   const hint = officerHint({
     agents: [
       { code: "legal", name: "法务助手", description: "很长很长的职责说明".repeat(20) },
     ],
   });
+  assert.match(hint, /【调度·必读】/);
   assert.match(hint, /法务助手（legal）/);
+  assert.match(hint, /仅允许 agentCode：legal/);
+  assert.match(hint, /禁止用 Glob\/Grep\/Read/);
   assert.equal(hint.includes("很长很长"), false);
-  assert.ok(hint.length < 120);
+  assert.match(hint, /delegate_to_agent/);
 });
 
 test("system append lists skill names only", () => {

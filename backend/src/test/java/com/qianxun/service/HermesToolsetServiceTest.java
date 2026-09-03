@@ -87,7 +87,7 @@ class HermesToolsetServiceTest {
         assertThat(views).filteredOn(v -> "skills".equals(v.name()))
                 .first().extracting(HermesToolsetService.ToolsetView::enabled).isEqualTo(true);
         assertThat(views).filteredOn(v -> "terminal".equals(v.name()))
-                .first().extracting(HermesToolsetService.ToolsetView::enabled).isEqualTo(false);
+                .first().extracting(HermesToolsetService.ToolsetView::enabled).isEqualTo(true);
     }
 
     @Test
@@ -101,13 +101,16 @@ class HermesToolsetServiceTest {
                 info("stt", "cli", true)
         );
         HermesToolsetService.ChatToolsetPlan plan = HermesToolsetService.planChatGateway(listed);
-        assertThat(plan.enabled()).containsExactly("web", "file", "skills");
-        assertThat(plan.disabled()).doesNotContain("web", "file", "skills");
+        assertThat(plan.enabled()).containsExactly(
+                "web", "file", "terminal", "code_execution", "delegation", "skills", "todo", "kanban", "plan");
+        assertThat(plan.disabled()).doesNotContain("web", "file", "skills", "terminal");
         assertThat(plan.known()).contains("web", "file");
         assertThat(plan.known()).doesNotContain("browser", "discord", "hermes-cli", "stt");
         assertThat(plan.disabled()).doesNotContain("discord", "browser");
         assertThat(HermesToolsetService.apiServerConfigList(plan.enabled(), true))
-                .containsExactly("web", "file", "skills", "no_mcp");
+                .containsExactly(
+                        "web", "file", "terminal", "code_execution", "delegation",
+                        "skills", "todo", "kanban", "plan", "no_mcp");
     }
 
     @Test
@@ -140,8 +143,9 @@ class HermesToolsetServiceTest {
         HermesToolsetService.ChatToolsetPlan missing = HermesToolsetService.planChatGateway(List.of(
                 info("web", "cli", true)
         ));
-        assertThat(missing.enabled()).containsExactly("web", "file", "skills");
-        assertThat(missing.disabled()).doesNotContain("file", "web", "skills");
+        assertThat(missing.enabled()).containsExactly(
+                "web", "file", "terminal", "code_execution", "delegation", "skills", "todo", "kanban", "plan");
+        assertThat(missing.disabled()).doesNotContain("file", "web", "skills", "terminal");
 
         HermesToolsetService.ChatToolsetPlan off = HermesToolsetService.planChatGateway(List.of(
                 info("file", "cli", false),
@@ -159,9 +163,8 @@ class HermesToolsetServiceTest {
                 info("todo", "cli", false),
                 info("kanban", "cli", true)
         ), true);
-        assertThat(plan.enabled()).contains("web", "file", "todo", "kanban", "skills");
-        assertThat(plan.enabled()).doesNotContain("terminal", "code_execution", "delegation", "plan");
-        assertThat(plan.disabled()).doesNotContain("file", "todo", "kanban", "skills");
+        assertThat(plan.enabled()).contains("web", "file", "todo", "kanban", "skills", "terminal", "plan");
+        assertThat(plan.disabled()).doesNotContain("file", "todo", "kanban", "skills", "terminal");
     }
 
     @Test

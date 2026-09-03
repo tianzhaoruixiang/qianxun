@@ -21,7 +21,7 @@ class HermesGeneratedDocumentsTest {
     @Test
     void skipsSoulAndNonDocs() {
         List<String> paths = HermesGeneratedDocuments.pathsFromTool(
-                mapper, "write_file", "{\"path\":\"SOUL.md\"}", "{\"file\":\"notes.txt\"}");
+                mapper, "write_file", "{\"path\":\"CLAUDE.md\"}", "{\"file\":\"notes.txt\"}");
         assertThat(paths).isEmpty();
     }
 
@@ -48,8 +48,9 @@ class HermesGeneratedDocumentsTest {
                         "差旅费报销单_赵天祥.xlsx",
                         "/opt/data/1/workspace/差旅费报销单_赵天祥.xlsx",
                         "workspace/差旅费报销单_赵天祥.xlsx");
-        assertThat(HermesGeneratedDocuments.downloadCandidates("差旅费报销单_赵天祥.xlsx", "1", "sess-a"))
+        assertThat(HermesGeneratedDocuments.downloadCandidates("差旅费报销单_赵天祥.xlsx", "1", "sess-a", "baoxiaozhushou"))
                 .contains(
+                        "/opt/data/1/profiles/baoxiaozhushou/workspace/sess-a/差旅费报销单_赵天祥.xlsx",
                         "/opt/data/1/workspace/qx/sess-a/差旅费报销单_赵天祥.xlsx",
                         "workspace/qx/sess-a/差旅费报销单_赵天祥.xlsx");
     }
